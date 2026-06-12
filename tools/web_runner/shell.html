@@ -34,6 +34,12 @@
   .col-json #json-editor { flex: 1 1 auto; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
     padding: 14px; width: 100%; }
+  /* Highlight whichever card currently holds focus (screen/scenario selectors,
+     the LVGL stage, or the JSON editor) so it's clear where input is going. */
+  .card.active { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* The active-card outline is the focus cue for the JSON editor; suppress the
+     textarea's own focus ring so it isn't doubly highlighted. */
+  #json-editor:focus { outline: none; }
   .card h2 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase;
     letter-spacing: .06em; color: var(--dim); font-weight: 600; }
   label { font-size: 15px; color: var(--dim); }
@@ -82,10 +88,27 @@
   /* On-screen hardware controls (joystick + side buttons) */
   .dpad { display: grid; grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 50px); gap: 5px; }
   .dpad button { width: 50px; height: 50px; border-radius: 8px; font-size: 19px; padding: 0; }
-  .dpad .center { background: var(--blue); border-color: var(--blue); color: #fff; font-size: 14px; }
+  .dpad .center { font-size: 13px; }
   .sidekeys { display: flex; flex-direction: column; gap: 10px; }
   .sidekeys button { width: 68px; height: 44px; font-size: 15px; }
   .hw-control.hidden { display: none; }
+
+  /* Normal view: the display selectors sit inline in the bar (as before); the
+     ⚙ gear is hidden. In fullscreen they collapse behind the gear (pinned
+     top-left) as an overlay popout, reclaiming vertical space (phone landscape). */
+  #settings-btn { display: none; }
+  #settings-panel { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  /* Only collapse the selectors behind the ⚙ popout when fullscreen vertical
+     space is tight (e.g. phone landscape). With room — desktop/tablet — they
+     stay inline in the bar. */
+  @media (max-height: 600px) {
+    #stage:fullscreen #settings-btn { display: inline-block; position: fixed; top: 14px; left: 14px;
+      z-index: 31; background: rgba(0,0,0,.6); }
+    #stage:fullscreen #settings-panel { position: fixed; top: 58px; left: 14px; z-index: 30;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.55); max-width: 92vw; }
+    #stage:fullscreen #settings-panel.hidden { display: none; }
+  }
 
   #fs-exit { display: none; }
 
@@ -102,15 +125,23 @@
   #stage:fullscreen #result-toast, #stage:-webkit-full-screen #result-toast { display: block; }
 
   /* Fullscreen: fills the viewport, keeps the top controls (resolution / input
-     mode / zoom), honors the zoom value, and scrolls if the zoomed screen is
-     larger than the viewport. Results show via the transient toast. */
+     mode / zoom), and honors the zoom value but scales a too-large zoom down so
+     the screen always fits. Results show via the transient toast. */
   #stage:fullscreen, #stage:-webkit-full-screen {
     background: var(--bg); width: 100vw; height: 100vh; padding: 12px;
     justify-content: safe center; overflow: auto; }
   #stage:fullscreen .hint, #stage:fullscreen #result-line,
   #stage:fullscreen #fs-btn { display: none; }
-  #stage:fullscreen #fs-exit { display: block; position: fixed; top: 14px; right: 14px;
-    z-index: 10; background: var(--panel2); opacity: .9; }
+  /* Fullscreen flank: keep the LVGL window centered between the controls — equal
+     side columns so the screen sits in the middle regardless of control widths. */
+  #stage:fullscreen #play.flank { display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center; justify-items: center; gap: 0 28px; width: 100%; }
+  #stage:fullscreen #play.flank #dpad { justify-self: end; }
+  #stage:fullscreen #play.flank #sidekeys { justify-self: start; }
+  #stage:fullscreen #fs-exit { display: flex; align-items: center; justify-content: center;
+    position: fixed; top: 14px; right: 14px; z-index: 31; width: 40px; height: 40px;
+    padding: 0; font-size: 20px; line-height: 1; border-radius: 50%;
+    background: rgba(0,0,0,.6); opacity: .9; }
 
   .hint { font-size: 14px; color: var(--dim); line-height: 1.6; text-align: center; }
   kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px;
@@ -140,29 +171,32 @@
 
   <!-- 2. The screen rendering itself -->
   <section id="stage" class="card">
-    <div id="top-bar" class="row" style="justify-content:center;">
-      <label>Resolution
-        <select id="res-select">
-          <option value="240x240">240 × 240</option>
-          <option value="320x240">320 × 240</option>
-          <option value="480x320">480 × 320</option>
-          <option value="800x480">800 × 480</option>
-        </select>
-      </label>
-      <label>Input mode
-        <select id="mode-select">
-          <option value="1">Hardware (keys)</option>
-          <option value="0">Touch (mouse)</option>
-        </select>
-      </label>
-      <label>Zoom
-        <select id="zoom-select">
-          <option value="1" selected>1×</option>
-          <option value="2">2×</option>
-          <option value="3">3×</option>
-          <option value="4">4×</option>
-        </select>
-      </label>
+    <div id="top-bar" class="row" style="justify-content:center; position:relative;">
+      <button id="settings-btn" title="Display settings" aria-expanded="false">⚙ Settings</button>
+      <div id="settings-panel" class="hidden">
+        <label>Resolution
+          <select id="res-select">
+            <option value="240x240">240 × 240</option>
+            <option value="320x240">320 × 240</option>
+            <option value="480x320">480 × 320</option>
+            <option value="800x480">800 × 480</option>
+          </select>
+        </label>
+        <label>Input mode
+          <select id="mode-select">
+            <option value="1">Hardware (keys)</option>
+            <option value="0">Touch (mouse)</option>
+          </select>
+        </label>
+        <label>Zoom
+          <select id="zoom-select">
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="3">3×</option>
+            <option value="4">4×</option>
+          </select>
+        </label>
+      </div>
       <button id="fs-btn">Fullscreen</button>
     </div>
 
@@ -201,7 +235,7 @@
       Touch mode: tap the screen; wheel / two-finger to scroll lists.
     </div>
 
-    <button id="fs-exit">Exit fullscreen ✕</button>
+    <button id="fs-exit" title="Exit fullscreen" aria-label="Exit fullscreen">✕</button>
   </section>
  </div><!-- /col-main -->
 
@@ -303,14 +337,21 @@
     var mode = app.isTouch ? 'center' : ((intendedW + controlsW <= availW) ? 'flank' : 'stack');
     play.className = mode;
 
-    // Both windowed and fullscreen honor the zoom dropdown. Windowed caps the
-    // scale so the screen never overflows its column; fullscreen respects the
-    // zoom exactly and lets the stage scroll if it's larger than the viewport.
-    var scale = app.zoom;
-    if (!fs) {
-      var widthBudget = Math.max(80, (mode === 'flank') ? (availW - controlsW) : availW);
-      scale = Math.min(app.zoom, widthBudget / app.displayW);
+    // Honor the zoom dropdown, but cap so the screen never overflows: by the
+    // column width when windowed, and additionally by the viewport height (minus
+    // the top controls bar and, when stacked, the controls row) in fullscreen —
+    // so a zoom larger than the displayable area is scaled down to guarantee fit.
+    var widthBudget = Math.max(80, (mode === 'flank') ? (availW - controlsW) : availW);
+    var scale = Math.min(app.zoom, widthBudget / app.displayW);
+    if (fs) {
+      // Short fullscreen collapses the top bar to an overlay ⚙ (≈no layout
+      // height); with room it stays an inline bar (~56px). Plus a stacked
+      // controls row when the screen is too wide to flank.
+      var hReserve = (window.innerHeight <= 600 ? 16 : 56) + (mode === 'stack' ? 156 : 0);
+      var availH = Math.max(80, window.innerHeight - 32 - hReserve);
+      scale = Math.min(scale, availH / app.displayH);
     }
+    scale = Math.max(scale, 0.1);
     c.style.width  = Math.round(app.displayW * scale) + 'px';
     c.style.height = Math.round(app.displayH * scale) + 'px';
   }
@@ -410,11 +451,41 @@
     window.addEventListener('resize', relayout);
     window.addEventListener('orientationchange', relayout);
 
+    // Display-settings popout (resolution / input mode / zoom).
+    var settingsBtn = document.getElementById('settings-btn');
+    var settingsPanel = document.getElementById('settings-panel');
+    function setSettingsOpen(open) {
+      settingsPanel.classList.toggle('hidden', !open);
+      settingsBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    settingsBtn.addEventListener('click', function () {
+      setSettingsOpen(settingsPanel.classList.contains('hidden'));
+    });
+    settingsPanel.addEventListener('change', function () { setSettingsOpen(false); });  // close after a pick
+    document.addEventListener('pointerdown', function (e) {
+      if (settingsPanel.classList.contains('hidden')) return;
+      if (settingsBtn.contains(e.target) || settingsPanel.contains(e.target)) return;
+      setSettingsOpen(false);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') setSettingsOpen(false);
+    });
+
     // Mouse-wheel / trackpad two-finger scroll over the canvas → scroll the list.
+    // Proportional to deltaY (normalized across deltaMode) and heavily dampened,
+    // otherwise high-frequency trackpad events scroll far too fast.
     canvas.addEventListener('wheel', function (e) {
       if (!app.ready) return;
       e.preventDefault();
-      app.scroll(e.deltaY > 0 ? -40 : 40);  // deltaY>0 (down) → reveal content below
+      var dy = e.deltaY;
+      var factor;
+      if (e.deltaMode === 1) { dy *= 16; factor = 0.2; }            // mouse wheel (lines)
+      else if (e.deltaMode === 2) { dy *= (app.displayH || 240); factor = 0.2; }  // pages
+      else if (Math.abs(dy) >= 50) { factor = 0.2; }               // mouse wheel (big px notch)
+      else { factor = 0.7; }                                       // trackpad 2-finger (small px)
+      // scroll_active(+) reveals content above, so invert the sign.
+      var amount = Math.round(-dy * factor);
+      if (amount !== 0) app.scroll(amount);
     }, { passive: false });
 
     // On-screen hardware controls (press + hold-to-repeat).
@@ -433,7 +504,30 @@
       btn.addEventListener('pointerleave', stop);
       btn.addEventListener('pointercancel', stop);
     });
+    // Keyboard nav requires the canvas to hold focus (SDL keyboard is scoped to
+    // it), so focus it on click.
     canvas.addEventListener('pointerdown', function () { this.focus(); });
+
+    // Outline whichever card currently holds focus — the screen/scenario
+    // selectors, the LVGL stage (canvas or its controls), or the JSON editor.
+    var cards = Array.prototype.slice.call(document.querySelectorAll('main .card'));
+    document.addEventListener('focusin', function (e) {
+      var active = e.target && e.target.closest ? e.target.closest('.card') : null;
+      cards.forEach(function (c) { c.classList.toggle('active', c === active); });
+    });
+
+    // Clicking anywhere in a card (not just on a control) activates it by
+    // focusing that card's primary input — so the whole card is the hit target.
+    function wireCardClick(card, primary) {
+      if (!card || !primary) return;
+      card.addEventListener('pointerdown', function (e) {
+        // Let native controls handle their own focus/cursor; otherwise focus the primary.
+        if (!e.target.closest('select, button, input, textarea, a')) primary.focus();
+      });
+    }
+    wireCardClick(document.getElementById('stage'), canvas);
+    wireCardClick(document.querySelector('.col-json .card'), editor);
+    wireCardClick(document.querySelector('.col-main > .card'), screenSel);
 
     // Auto-select touch mode on touch devices.
     if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
@@ -445,6 +539,10 @@
     populateScenarios(screenSel.value);
     editor.value = currentContextText();
     applyEditor();
+
+    // In hardware mode, focus the screen on load so arrow keys work immediately
+    // (no need to discover that you must click it first).
+    if (!app.isTouch) canvas.focus();
   }
 </script>
 

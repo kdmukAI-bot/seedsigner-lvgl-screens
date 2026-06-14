@@ -148,6 +148,11 @@ target_compile_definitions(screen_runner PRIVATE
   # session (see the screenshot generator's note).
   LV_USE_STDLIB_MALLOC=LV_STDLIB_CLIB
   LV_USE_TINY_TTF=1
+  # Farsi/Arabic i18n: BIDI = right-to-left reordering of mixed RTL/LTR text;
+  # ARABIC_PERSIAN_CHARS = cursive shaping (base letters -> presentation forms).
+  # Both must match the font packs, which subset to the forms the shaper emits.
+  LV_USE_BIDI=1
+  LV_USE_ARABIC_PERSIAN_CHARS=1
   DISPLAY_WIDTH=${DISPLAY_WIDTH}
   DISPLAY_HEIGHT=${DISPLAY_HEIGHT}
   $<$<BOOL:${SUPPORT_DISPLAY_HEIGHT_240}>:SUPPORT_DISPLAY_HEIGHT_240>

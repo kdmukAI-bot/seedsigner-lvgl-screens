@@ -94,6 +94,36 @@ and there the coupling is to a *pack*, never to firmware.
 - **No-rebuild proof:** a translation edit that introduces a new (already-in-block) glyph requires no
   firmware change and no new pack for the baked/script tiers.
 
+## Stage A implementation spec (in progress)
+
+**Foundation done (uncommitted):** `build_fontpacks`-style block subsets generated — Western (383
+glyphs), Greek (162), Cyrillic (303), Vietnamese (468), Regular+SemiBold each. The **Western baseline is
+bin2c'd** into `components/seedsigner/fonts/opensans_western_{regular,semibold}.{c,h}` (~27.6KB TTF →
+~88KB C array each), exposing `opensans_western_{regular,semibold}_ttf[]` + `_len`.
+
+**Wiring (remaining) — install via `set_display`, no per-consumer edits:**
+- `set_display()` (gui_constants.cpp) installs the baseline when `lv_is_initialized()` — every consumer
+  already calls it, so generator/runners/firmware need no changes. Pre-`lv_init` calls (generator's
+  usage/`--dump-locales`) skip install.
+- **Per-profile font cache, created lazily, NEVER destroyed** (4 profiles × 5 roles = 20 tiny_ttf, tiny
+  structs, embedded bytes shared). Stable pointers → safe with the locale `clear`/restore (which captures
+  the baseline pointer as `original`), and CJK's embedded-English fallback automatically becomes the
+  OpenSans **TTF** baseline (aligns the plan) instead of the baked floor.
+- `fonts_for_multiplier`: the 5 OpenSans slots → `nullptr` (icon/keyboard stay baked). Static `DisplayProfile`s
+  start with null text-role pointers; `set_display` fills them post-`lv_init` before any render.
+- **Per-role px per profile — replicate the baked sizes exactly (parity):** main_menu_title `26·m`,
+  title `20·m`, button `18·m`, body `17·m`; **large_button = `20·m` at 240 but `18·m` at 320/480** (the
+  quirk). Weights: body = Regular, the other four = SemiBold. (Hardcode in gui_constants — don't `#include`
+  locale_fonts to avoid a cycle.)
+- Remove baked `opensans_*_4bpp*.c` from gui_constants + all 4 CMakeLists; add `opensans_western_*.c`;
+  delete the baked files. Remove the generator's `--baseline-ttf` spike (superseded by the always-on
+  install).
+- **Verify:** generator renders en/es via the baseline; el/ru/vi correctly BOX (no packs yet — faithful);
+  `screen_runner` builds (web_runner code updated, Docker build deferred).
+
+**Stage B:** Greek/Cyrillic/Vietnamese as `ChainRole::Fallback` (same-size) — `build_fontpacks` block-range
+mode → script packs in `lang-packs/`; generator loads + chains them; el/ru/vi then render.
+
 ## TODOs / follow-ups
 
 - **Spike done (2026-06-14):** `screenshot_gen --baseline-ttf` repoints the 5 roles to OpenSans tiny_ttf

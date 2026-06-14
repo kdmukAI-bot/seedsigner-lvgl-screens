@@ -250,6 +250,16 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
     lv_obj_set_style_pad_all(out.screen, 0, LV_PART_MAIN);
     lv_obj_set_style_outline_width(out.screen, 0, LV_PART_MAIN);
 
+    // Let every label resolve its OWN text direction from its content: Arabic /
+    // Persian text runs right-to-left (bidi + shaping), Latin stays left-to-right.
+    // AUTO — not RTL — is deliberate: LVGL's flex/containers only mirror on an
+    // explicit LV_BASE_DIR_RTL, so element LAYOUT keeps its left-to-right order
+    // (e.g. the Scan tile stays top-left, the passphrase action keys stay on the
+    // right where they map to the physical hardware buttons). Only the TEXT flips.
+    // Full UI mirroring for RTL locales is intentionally deferred pending Farsi UX
+    // guidance. Harmless for LTR locales (their text auto-detects LTR).
+    lv_obj_set_style_base_dir(out.screen, LV_BASE_DIR_AUTO, 0);
+
     bool show_back = true;
     bool show_power = false;
     const auto &tn = cfg["top_nav"];

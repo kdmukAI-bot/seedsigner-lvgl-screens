@@ -63,6 +63,11 @@ struct LocaleFontEntry {
     // Western baseline at the native role sizes. Empty ⇒ a corpus-subset pack
     // (the Noto Primary/CJK locales), built from the .po glyph set.
     std::string unicode_range;
+    // Right-to-left script (Arabic/Persian/Hebrew). The screen layer mirrors
+    // layout (base direction, top-nav button sides, text alignment) for these
+    // locales; bidi reordering itself is handled by LVGL (LV_USE_BIDI). Surfaced
+    // in the manifest as "rtl" so every consumer/platform learns it the same way.
+    bool rtl = false;
 };
 
 // Canonical table accessors.

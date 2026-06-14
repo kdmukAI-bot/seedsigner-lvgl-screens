@@ -33,10 +33,65 @@ import os
 import subprocess
 import sys
 
-from po_catalog import corpus_chars
+from po_catalog import corpus_chars, parse_entries
 
 # This file lives at tools/i18n/; repo root is two levels up.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+# Base Unicode blocks whose letters the renderer reshapes into presentation forms
+# (LV_USE_ARABIC_PERSIAN_CHARS) BEFORE glyph lookup. A corpus containing these
+# must be subset to the forms the shaper emits, not the base letters (see
+# shaped_codepoints / lv_shape). Other scripts pass through the shaper unchanged.
+ARABIC_BASE_BLOCKS = (
+    (0x0600, 0x06FF),  # Arabic
+    (0x0750, 0x077F),  # Arabic Supplement
+    (0x08A0, 0x08FF),  # Arabic Extended-A
+)
+
+
+def needs_arabic_shaping(symbols):
+    """True if `symbols` (a corpus's char set) contains base Arabic-script
+    letters. Those locales need presentation-form subsetting via lv_shape."""
+    return any(any(lo <= ord(c) <= hi for lo, hi in ARABIC_BASE_BLOCKS)
+               for c in symbols)
+
+
+def corpus_text(po_path):
+    """All translated strings (msgstr) joined by newlines. Unlike corpus_chars
+    (a deduped char set) this preserves each string's internal adjacency, which
+    Arabic shaping depends on. Newlines break cross-string joining, matching how
+    the renderer treats them."""
+    return "\n".join(mstr for _mid, mstr in parse_entries(po_path) if mstr)
+
+
+def ensure_shaper(shaper_bin):
+    """Return the path to the lv_shape binary, building it on demand if absent.
+    lv_shape (tools/i18n/shaper) is the LVGL Arabic/Persian shaping oracle; it
+    must link the SAME third_party/lvgl the consumers render with, so we build it
+    from in-repo source rather than expecting a system copy."""
+    if os.path.exists(shaper_bin):
+        return shaper_bin
+    src_dir = os.path.join(REPO_ROOT, "tools/i18n/shaper")
+    build_dir = os.path.join(src_dir, "build")
+    print(f"[shaper] lv_shape not found at {shaper_bin}; building it...", file=sys.stderr)
+    subprocess.run(["cmake", "-S", src_dir, "-B", build_dir,
+                    "-DCMAKE_BUILD_TYPE=Release"], check=True)
+    subprocess.run(["cmake", "--build", build_dir, "-j", str(os.cpu_count() or 2)],
+                   check=True)
+    if not os.path.exists(shaper_bin):
+        raise FileNotFoundError(f"lv_shape build did not produce {shaper_bin}")
+    return shaper_bin
+
+
+def shaped_codepoints(po_path, shaper_bin):
+    """Run a locale's corpus through lv_shape (the real LVGL shaper) and return
+    the set of code points the renderer will request for that text — i.e. the
+    presentation forms the corpus's base letters resolve to, plus any pass-through
+    code points (digits, punctuation, ZWNJ)."""
+    text = corpus_text(po_path)
+    res = subprocess.run([shaper_bin], input=text, check=True,
+                         capture_output=True, text=True, encoding="utf-8")
+    return set(json.loads(res.stdout))
 
 
 def source_ttf(source_family, assets_dir):
@@ -164,6 +219,9 @@ def main():
                     help="output root (repo-root lang-packs/) for <locale>/<locale>.ttf")
     ap.add_argument("--locale", action="append",
                     help="only build this locale (repeatable); default = all in manifest")
+    ap.add_argument("--shaper-bin",
+                    default=os.path.join(REPO_ROOT, "tools/i18n/shaper/build/lv_shape"),
+                    help="lv_shape binary (Arabic/Persian shaping oracle); built on demand if absent")
     args = ap.parse_args()
 
     locales = manifest_locales(args.gen_bin, args.locale)
@@ -185,6 +243,23 @@ def main():
         if not symbols:
             print(f"[{name}] SKIP: empty non-ASCII corpus", file=sys.stderr)
             continue
+
+        # Arabic-script locales (e.g. fa): the renderer reshapes base letters into
+        # presentation forms (LV_USE_ARABIC_PERSIAN_CHARS) before glyph lookup, so
+        # the base letters from the .po are never drawn — their positional FORMS
+        # are. Ask lv_shape (the real LVGL shaper) which code points the corpus
+        # resolves to, and subset to exactly those. This is corpus-driven (only
+        # the letters actually used) yet form-complete (every form the renderer
+        # will request), and the digit/ZWNJ/lam-alef edge cases are handled by the
+        # real shaper, not a re-implementation. Non-Arabic corpora skip this.
+        shaped = needs_arabic_shaping(symbols)
+        if shaped:
+            cps = {cp for cp in shaped_codepoints(po, ensure_shaper(args.shaper_bin))
+                   if cp > 0x7F}  # ASCII = baked OpenSans floor
+            symbols = "".join(sorted(chr(cp) for cp in cps))
+            if not symbols:
+                print(f"[{name}] SKIP: empty shaped corpus", file=sys.stderr)
+                continue
 
         src = source_ttf(entry["source_family"], args.assets_dir)
         if not os.path.exists(src):
@@ -218,6 +293,8 @@ def main():
             "locale": name,
             "source_family": entry["source_family"],
             "chain": entry["chain"],
+            # True ⇒ glyph set = presentation forms from lv_shape (not base letters).
+            "shaped": shaped,
             "corpus_glyphs": len(symbols),
             "font": {
                 "file": f"{name}.ttf",

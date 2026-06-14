@@ -1,9 +1,61 @@
 # Farsi (Persian) support — RTL + Arabic shaping plan (Phase 2)
 
-_Status: **planned, not started.** Next-session implementation plan. Farsi (`fa`) is
-deliberately absent from `tools/i18n/supported_locales.json` today (it would render
-as `.notdef` boxes). Companion to `docs/font-and-i18n-rendering.md` and
-`docs/font-tiering-plan.md` (Farsi is the first **Phase 2** language pack)._
+_Status: **IMPLEMENTED** (first pass, desktop tools). `fa` ships in
+`tools/i18n/supported_locales.json` with a 13.8 KB corpus-shaped NotoSansAR pack
+and renders shaped, right-to-left across all profiles. Companion to
+`docs/font-and-i18n-rendering.md` and `docs/font-tiering-plan.md`._
+
+## What was actually built (vs. the plan below)
+
+- **Subsetting: corpus-shaped, not block-range.** Rather than subsetting the whole
+  Arabic blocks, the pack contains exactly the presentation forms the renderer
+  emits for the `fa` corpus. The glyph set is produced by a NEW standalone tool,
+  **`tools/i18n/shaper/lv_shape`**, which compiles LVGL's OWN shaper
+  (`lv_text_ap_proc`, `LV_USE_ARABIC_PERSIAN_CHARS=1`) and turns stdin text into
+  the JSON code-point set it resolves to. `build_fontpacks.py` pipes each
+  Arabic-script locale's `.po` corpus through it (`needs_arabic_shaping` gate) and
+  subsets to those forms (ASCII excluded — baked floor). Using the real shaper
+  (not a Python port) means the pack can never drift from render-time behavior and
+  the tricky edge cases are handled for free: the buggy digit row
+  `{0x06F0,-1,2,0}` only ever emits its isolated form in real contexts; ZWNJ is
+  preserved as a join-breaker; `لا` collapses to the lam-alef ligature. Result for
+  the current `fa` corpus: **105 glyphs / 13.8 KB** (the whole font is 194 KB).
+  Why standalone (not a screenshot_gen subcommand): the packs are consumed by
+  every renderer (Pi Zero, ESP32, desktop), so pack prep is its own shared tool.
+- **Render config:** `LV_USE_BIDI=1` + `LV_USE_ARABIC_PERSIAN_CHARS=1` added to all
+  four desktop targets' compile defs. (LTR locales unaffected; English verified
+  pixel-unchanged.)
+- **Table:** `fa` is `ChainRole::Primary` (NotoSansAR primary at the CJK bump,
+  baked OpenSans fallback for embedded Latin/digits) with a `bool rtl` field;
+  `supported_locales_json()` emits `"rtl": true` as metadata for consumers (the
+  outward interface) for when RTL UX guidance arrives. No in-process layout code
+  consumes it today.
+- **RTL is TEXT-ONLY (deliberate scope, not the plan's full mirroring).** The
+  screen root sets `LV_BASE_DIR_AUTO`, so each label resolves its own direction
+  from its content: Arabic/Persian text runs right-to-left (bidi reorders runs,
+  punctuation lands at the logical end) and Latin stays LTR. Crucially `AUTO` is
+  NOT `RTL`: LVGL's flex/containers mirror only on an explicit `LV_BASE_DIR_RTL`
+  (`lv_flex.c` checks `== LV_BASE_DIR_RTL`), so element **layout keeps its
+  left-to-right order** — the Scan tile stays top-left, the back chevron stays on
+  the left pointing left, and the passphrase action keys stay on the right where
+  they map to the physical hardware buttons. `AUTO` is set unconditionally
+  (harmless for LTR locales: English auto-detects LTR; verified pixel-unchanged).
+- **Why text-only:** the original plan (step 4 below) called for mirroring the UI
+  (swapping nav button sides, flipping alignment) as conventional RTL practice,
+  but flagged "how much screen mirroring is enough?" as an open question. Per
+  product guidance we are NOT mirroring on-screen elements until we have actual
+  Farsi-user UX input — back stays left, hardware-mapped buttons stay put, etc.
+  When that guidance lands, selective mirroring can key off the `rtl` manifest
+  flag (or a re-introduced `seedsigner_locale_is_rtl()` accessor).
+
+**Known refinements (not blockers):** at the 240px icon-grid main menu, long Farsi
+labels (e.g. "عبارات بازیابی") clip to the cell width — a general long-label
+constraint (CJK fits because it's compact), not an RTL bug. Hindi/Thai remain
+Phase-2 follow-ons.
+
+---
+
+_Original plan (kept for reference):_
 
 ## TL;DR — it's feasible with the existing stack (no HarfBuzz)
 

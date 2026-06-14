@@ -62,8 +62,10 @@ if command -v tailscale >/dev/null 2>&1; then
 fi
 
 # Serve in the background so we can watch alongside; clean it up on exit.
-# --bind 0.0.0.0 is the default for http.server, but make it explicit.
-python3 -m http.server "${PORT}" --bind 0.0.0.0 --directory "${SERVE_DIR}" &
+# Use the no-cache server (not `python3 -m http.server`) so a re-stage or rebuild
+# is picked up on a normal refresh — plain http.server lets the browser cache the
+# runtime-fetched locales.json / .wasm and hide newly added locales/packs.
+python3 "${SCRIPT_DIR}/nocache_server.py" "${PORT}" --bind 0.0.0.0 --directory "${SERVE_DIR}" &
 SERVE_PID=$!
 trap 'kill "$SERVE_PID" 2>/dev/null || true; echo; echo "stopped server + watcher"' INT TERM
 

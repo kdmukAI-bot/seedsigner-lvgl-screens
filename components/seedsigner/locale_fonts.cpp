@@ -87,6 +87,14 @@ const std::vector<LocaleFontEntry>& locale_font_table() {
         {"zh_Hans_CN", "NotoSansSC", ChainRole::Primary, cjk_primary_roles()},
         {"ja",         "NotoSansJP", ChainRole::Primary, cjk_primary_roles()},
         {"ko",         "NotoSansKR", ChainRole::Primary, cjk_primary_roles()},
+        // Arabic/Persian (Phase 2): corpus-subset NotoSansAR as the Primary, at
+        // the same legibility-bumped sizes as CJK. The subset holds the
+        // presentation FORMS the renderer emits (LV_USE_ARABIC_PERSIAN_CHARS),
+        // not base letters — the offline builder runs the corpus through the real
+        // LVGL shaper (tools/i18n/shaper) to learn them. rtl=true drives layout
+        // mirroring; LVGL (LV_USE_BIDI) handles the bidi reordering. The baked
+        // OpenSans baseline stays as fallback so embedded Latin/digits render LTR.
+        {"fa", "NotoSansAR", ChainRole::Primary, cjk_primary_roles(), "", /*rtl=*/true},
         // Script packs: block-range OpenSans subsets, same-size Fallback over the
         // baked Western baseline. One pack per script covers its language family
         // (e.g. ru's Cyrillic block also serves uk/bg) with no corpus coupling.
@@ -141,6 +149,11 @@ std::string supported_locales_json() {
         // Script packs carry the block range the offline subsetter slices (no .po).
         if (!e.unicode_range.empty()) {
             locale_obj["unicode_range"] = e.unicode_range;
+        }
+        // RTL locales: the host/screen layer mirrors layout for these. Emitted
+        // only when true (LTR is the default), mirroring the unicode_range style.
+        if (e.rtl) {
+            locale_obj["rtl"] = true;
         }
 
         json fonts = json::array();

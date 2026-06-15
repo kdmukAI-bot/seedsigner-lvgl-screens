@@ -250,6 +250,16 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
     lv_obj_set_style_pad_all(out.screen, 0, LV_PART_MAIN);
     lv_obj_set_style_outline_width(out.screen, 0, LV_PART_MAIN);
 
+    // Let every label resolve its OWN text direction from its content: Arabic /
+    // Persian text runs right-to-left (bidi + shaping), Latin stays left-to-right.
+    // AUTO — not RTL — is deliberate: LVGL's flex/containers only mirror on an
+    // explicit LV_BASE_DIR_RTL, so element LAYOUT keeps its left-to-right order
+    // (e.g. the Scan tile stays top-left, the passphrase action keys stay on the
+    // right where they map to the physical hardware buttons). Only the TEXT flips.
+    // Full UI mirroring for RTL locales is intentionally deferred pending Farsi UX
+    // guidance. Harmless for LTR locales (their text auto-detects LTR).
+    lv_obj_set_style_base_dir(out.screen, LV_BASE_DIR_AUTO, 0);
+
     bool show_back = true;
     bool show_power = false;
     const auto &tn = cfg["top_nav"];
@@ -556,18 +566,22 @@ static void add_warning_edges_overlay(lv_obj_t *screen, int status_color) {
     lv_obj_set_style_border_width(edge, EDGE_PADDING, LV_PART_MAIN);
     lv_obj_set_style_border_side(edge, LV_BORDER_SIDE_FULL, LV_PART_MAIN);
 
-    // Pulse: opacity 64 -> 255 -> 64, then a brief hold at the trough before
-    // the next inhale. Python's algorithm holds 8 of 10 trough frames at
-    // ~10fps (~800 ms) — we mirror that with a 400 ms repeat delay.
+    // Pulse: opacity 255 -> 0 -> 255. The edges REST at full color and breathe
+    // OUT to fully off, then hold at full color before the next breath. This
+    // mirrors Python's WarningEdgesThread, which rests at inhale_factor=0 (full
+    // color), holds there for 8 frames, and ramps the brightness OUT toward black
+    // — so the resting/held state is bright, and the trough is (near) off. (The
+    // earlier 64->255 inverted this: it rested dim and never reached full off.)
     //
-    // LVGL v9 names: `set_duration` controls the forward leg, the matching
-    // `set_reverse_duration` controls the back-to-start leg, and
-    // `set_repeat_delay` is the pause inserted between iterations (i.e. at
-    // the trough, since our iteration ends back at `start`).
+    // LVGL v9 names: `set_duration` is the forward leg (full -> off),
+    // `set_reverse_duration` the back-to-start leg (off -> full), and
+    // `set_repeat_delay` the pause between iterations — held at `start` (full
+    // color), since each iteration ends back at `start`. Python's ~10fps hold of
+    // 8 trough frames (~800 ms) maps to a 400 ms repeat delay here.
     lv_anim_t pulse;
     lv_anim_init(&pulse);
     lv_anim_set_var(&pulse, edge);
-    lv_anim_set_values(&pulse, 64, 255);
+    lv_anim_set_values(&pulse, 255, 0);
     lv_anim_set_duration(&pulse, 500);
     lv_anim_set_reverse_duration(&pulse, 500);
     lv_anim_set_repeat_delay(&pulse, 400);
@@ -1796,13 +1810,54 @@ void seed_add_passphrase_screen(void *ctx_json) {
 }
 
 
-void main_menu_screen(void *ctx)
+void main_menu_screen(void *ctx_json)
 {
-    // `ctx` is unused for main_menu_screen, but kept to match the shared
-    // screen callback signature. Cast to void to silence unused-parameter warnings.
-    (void)ctx;
+    // The home menu's structure is fixed (a 2x2 grid of four icon buttons), but
+    // its DISPLAY TEXT — the top-nav title and the four button labels — must
+    // localize. So those come from the JSON context (translated upstream by the
+    // scenario localizer / Python view layer); the four icons never translate.
+    //
+    // Defaults below reproduce the original English home menu, so the screen
+    // still renders correctly when called with no context (ctx_json == NULL).
+    json cfg = {
+        {"top_nav", {{"title", "Home"}, {"show_back_button", false}, {"show_power_button", true}}},
+    };
 
-    json cfg = {{"top_nav", {{"title", "Home"}, {"show_back_button", false}, {"show_power_button", true}}}};
+    // Merge any provided context over the defaults (RFC 7396 merge-patch): a
+    // caller can override just the keys it cares about (e.g. only button_list).
+    const char *json_str = (const char *)ctx_json;
+    if (json_str) {
+        json incoming;
+        try {
+            incoming = json::parse(json_str);
+        } catch (...) {
+            throw std::runtime_error("invalid JSON syntax");
+        }
+        if (!incoming.is_object()) {
+            throw std::runtime_error("screen config must be a JSON object");
+        }
+        cfg.merge_patch(incoming);
+    }
+
+    // Button labels come from cfg["button_list"] when it supplies exactly the
+    // four the grid needs; otherwise fall back to the English defaults. (The
+    // grid is a fixed 2x2, so a mismatched count means an ill-formed context —
+    // defaulting keeps the screen legible rather than rendering blanks.)
+    static const char *default_labels[] = {"Scan", "Seeds", "Tools", "Settings"};
+    std::vector<std::string> labels(default_labels, default_labels + 4);
+    {
+        std::vector<std::string> from_cfg;
+        if (read_button_list_labels(cfg, from_cfg) && from_cfg.size() == 4) {
+            labels = std::move(from_cfg);
+        }
+    }
+
+    // Drop button_list before building the scaffold: this screen lays out its own
+    // 2x2 large-icon grid, so the scaffold must stay in its no-button_list mode.
+    // Leaving the key in would make the scaffold ALSO stack a hidden text-button
+    // list in the body, which bleeds through the gaps behind the grid.
+    cfg.erase("button_list");
+
     screen_scaffold_t screen = create_top_nav_screen_scaffold(cfg, false, &MAIN_MENU_TITLE_FONT);
     lv_obj_t *scr = screen.screen;
     lv_obj_t *body_content = screen.body;
@@ -1813,7 +1868,6 @@ void main_menu_screen(void *ctx)
         SeedSignerIconConstants::TOOLS,
         SeedSignerIconConstants::SETTINGS,
     };
-    static const char *labels[] = {"Scan", "Seeds", "Tools", "Settings"};
 
     const int32_t available_w = lv_obj_get_content_width(body_content);
     const int32_t screen_h = lv_obj_get_height(scr);
@@ -1832,7 +1886,7 @@ void main_menu_screen(void *ctx)
 
     lv_obj_t *buttons[4] = {NULL, NULL, NULL, NULL};
     for (uint32_t i = 0; i < 4; ++i) {
-        lv_obj_t *btn = large_icon_button(body_content, icons[i], labels[i], NULL);
+        lv_obj_t *btn = large_icon_button(body_content, icons[i], labels[i].c_str(), NULL);
         lv_obj_set_size(btn, button_w, button_h);
         buttons[i] = btn;
     }

@@ -167,8 +167,9 @@ switch feeding alignment + base_dir, rather than per-call flips.
 - **tiny_ttf × bidi × shaper end-to-end** — confirm the pipeline order (bidi reorders
   → AP shaper substitutes presentation forms → tiny_ttf rasterizes by code point)
   actually holds in LVGL v9.5 with `cache_size=0`. Smoke-test early.
-- **Bug #3 (tiny_ttf cache spin)** still applies on-device; desktop `cache_size=0` is
-  fine for verification.
+- **On-device glyph cache** needs memory provisioning before it can be enabled (it OOMs on a small
+  fixed pool — the former "bug #3", not a cache defect); desktop `cache_size=0` is fine for verification.
+  See `docs/knowledge/tiny-ttf-cache-spin-root-cause.md`.
 - Same `fa` work template applies to the other Phase-2 corpus scripts: **Thai** (`th`,
   no shaping but needs Noto Thai + the combining marks) and **Hindi/Devanagari**
   (`hi`, needs real GSUB shaping → likely HarfBuzz, a bigger lift than Arabic).

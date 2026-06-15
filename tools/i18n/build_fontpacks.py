@@ -282,11 +282,11 @@ def main():
         # single-font Python renderer, which has no fallback and draws embedded
         # English at the bumped size.
         #
-        # This requires the lv_tiny_ttf fallback fix (third_party/patches/
-        # lv_tiny_ttf-fallback-chain.patch): the stock no-cache path reports
-        # absent glyphs as "found", which would render embedded English as blank
-        # .notdef boxes instead of falling through. With the patch applied the
-        # chain advances correctly and ASCII can stay out of the subset.
+        # This relies on the render layer running the tiny_ttf glyph cache ON (the
+        # default, SEEDSIGNER_TTF_CACHE_SIZE): the cached glyph path reports an
+        # absent codepoint as "not found", so the fallback chain advances and ASCII
+        # can stay out of the subset. (LVGL's no-cache path has a bug here — "bug
+        # #2" — but no target runs cache_size=0; see the knowledge doc.)
         subset_ttf(src, symbols, out_ttf, drop_layout)
 
         manifest_out = {

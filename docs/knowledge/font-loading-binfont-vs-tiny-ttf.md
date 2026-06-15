@@ -52,16 +52,17 @@ boxes instead of falling through to the baked OpenSans.
 **Symptom seen:** Chinese menu title + first (translated) button rendered, but the untranslated English
 buttons ("Persistent Settings", "Camera", "Network") were **blank**.
 
-**Fix (`third_party/patches/lv_tiny_ttf-fallback-chain.patch`):** the no-cache path now `return false`
-when `stbtt_FindGlyphIndex()` yields 0, matching what the *cached* path already does (its
-`tiny_ttf_glyph_cache_create_cb` returns `false` for an absent glyph). The fallback chain then advances
-correctly. With the fix applied, `build_fontpacks.py` **no longer bakes ASCII into the CJK subsets**, so
-embedded English defers to OpenSans and renders at the **normal English size** (a deliberate divergence
-from single-font Python, which has no fallback and draws embedded English at the bumped CJK size).
+**Why it doesn't bite us (no patch carried).** The bug is in the **no-cache** path only — the *cached*
+path already returns `false` for an absent glyph (its `tiny_ttf_glyph_cache_create_cb` does the right
+thing), so the fallback chain advances correctly. SeedSigner runs the glyph cache **on by default**
+(`SEEDSIGNER_TTF_CACHE_SIZE=256`, see §3), so embedded English defers to OpenSans and renders at the
+**normal English size** (a deliberate divergence from single-font Python, which has no fallback and draws
+embedded English at the bumped CJK size). `build_fontpacks.py` therefore keeps ASCII out of the CJK subsets.
 
-The patch is carried against the pinned LVGL submodule (see `third_party/patches/README.md`); push it
-upstream so the patch can eventually be dropped. The earlier workaround — include ASCII in CJK subsets so
-the script font carries its own Latin glyphs (English then at the bumped size) — is no longer used.
+A one-line fix for the no-cache path (`return false` when `stbtt_FindGlyphIndex()` yields 0, matching the
+cached path) was prototyped and carried as a local submodule patch, but it has since been **removed** — it
+only matters at `cache_size=0`, which no SeedSigner target uses. This analysis is kept so the fix can be
+contributed to LVGL upstream on its own later; reconstruct it from this description (or git history) then.
 
 ## 3. Tiny TTF: the glyph cache holds bitmaps — give it memory; it is not a cache bug
 
@@ -83,9 +84,9 @@ size to 0 (rasterize-direct).
 - Engine: **Tiny TTF**, glyph cache on by default (`SEEDSIGNER_TTF_CACHE_SIZE=256`; each host provisions
   the memory to back it — see §3), kerning off.
 - CJK subsets **exclude ASCII**; embedded English defers to the OpenSans fallback at the English size
-  (bug #2 fixed by `third_party/patches/lv_tiny_ttf-fallback-chain.patch`).
-- The remaining bug-#2 follow-up is to push that fix upstream so the local patch can be dropped. (The
-  former "bug #3" is not a bug — see §3.)
+  (works because the glyph cache is on — the no-cache bug #2 doesn't apply; see §2).
+- bug #2's no-cache fix is no longer carried locally (patch removed); it can be contributed to LVGL
+  upstream on its own later. (The former "bug #3" is not a bug — see §3.)
 - The bin/loader hang (§1) and the fallback bug (§2) are exactly what the planned **rasterize-all,
   per-architecture validation gate** would surface (render every corpus glyph at every size, under ASan,
   on each target build).

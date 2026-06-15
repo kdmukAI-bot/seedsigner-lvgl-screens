@@ -183,7 +183,8 @@ Remaining tiers (Arabic/Persian/Thai/Hindi as Noto Primary/corpus packs) are Pha
 
 ## Dependencies / cross-refs
 
-- Builds on the `tools/` reorg (done) and the bug #2 fallback fix (done; `third_party/patches/`).
+- Builds on the `tools/` reorg (done). The fallback chain works via the on-by-default glyph cache
+  (bug #2's no-cache patch was removed; see `docs/knowledge/font-loading-binfont-vs-tiny-ttf.md`).
 - **Enabling the on-device glyph cache requires memory provisioning** (Pi Zero CLIB malloc / ESP32 PSRAM),
   not a code fix — see `docs/knowledge/tiny-ttf-cache-spin-root-cause.md`.
 - Design rationale: `docs/font-and-i18n-rendering.md`.

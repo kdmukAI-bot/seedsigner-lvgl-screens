@@ -58,6 +58,12 @@ function populateRes(resolutions) {
 function render() {
   if (!curManifest) return;
   content.innerHTML = '';
+  // Cache-bust images by the build's generation time, so a redeploy is picked up
+  // even when the browser has the old PNG cached (GitHub Pages sends a fixed
+  // Cache-Control we can't override). The token is stable within a build and
+  // changes across builds — images still cache normally between refreshes of the
+  // same deploy, and only re-download when the screenshots actually change.
+  var bust = (curManifest.generated_at || '').replace(/\D/g, '');
   var resolutions = (curManifest.resolutions || []).filter(function (r) {
     return r.label === resSel.value;
   });
@@ -75,7 +81,7 @@ function render() {
       var fig = document.createElement('figure');
       var cap = document.createElement('figcaption'); cap.textContent = s.display_name;
       var img = document.createElement('img'); img.loading = 'lazy';
-      img.src = curLocale + '/' + s.path; img.alt = s.display_name; img.width = res.width; img.height = res.height;
+      img.src = curLocale + '/' + s.path + (bust ? '?v=' + bust : ''); img.alt = s.display_name; img.width = res.width; img.height = res.height;
       fig.appendChild(cap); fig.appendChild(img); grid.appendChild(fig);
     });
     section.appendChild(grid); content.appendChild(section);
@@ -86,7 +92,9 @@ function loadLocale(locale) {
   curLocale = locale;
   if (langSel.value !== locale) langSel.value = locale;
   meta.textContent = 'Loading ' + locale + '…';
-  fetch(locale + '/manifest.json')
+  // Fetch the manifest fresh each load (cache-bust per page view) so the per-build
+  // image token derived from it is never itself served stale. The JSON is tiny.
+  fetch(locale + '/manifest.json?_=' + Date.now())
     .then(function (r) { if (!r.ok) throw new Error('manifest ' + r.status); return r.json(); })
     .then(function (m) { curManifest = m; populateRes(m.resolutions || []); render(); updateUrl(); })
     .catch(function (e) { content.innerHTML = ''; meta.textContent = 'Failed to load ' + locale + '/manifest.json: ' + e.message; });
@@ -95,7 +103,7 @@ function loadLocale(locale) {
 resSel.addEventListener('change', function () { render(); updateUrl(); });
 langSel.addEventListener('change', function () { loadLocale(langSel.value); });
 
-fetch('locales.json')
+fetch('locales.json?_=' + Date.now())
   .then(function (r) { return r.json(); })
   .then(function (list) {
     (list || []).forEach(function (l) {

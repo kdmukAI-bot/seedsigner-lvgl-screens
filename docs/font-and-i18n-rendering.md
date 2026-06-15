@@ -96,9 +96,10 @@ tiering.) Per locale:
 misses in the script primary and the chain defers to the OpenSans baseline (now the Western-Latin TTF).
 This is a deliberate divergence
 from production Python, whose single-font PIL renderer has no fallback and draws embedded English at the
-bumped CJK size. It depends on the Tiny TTF fallback fix (`third_party/patches/lv_tiny_ttf-fallback-chain.patch`):
-the stock no-cache path reports absent codepoints as *found*, so without the patch the fallback never
-engages and embedded English renders as blank `.notdef` boxes (see knowledge doc, bug #2).
+bumped CJK size. It relies on the glyph cache being **on** (the default): the cached glyph path defers an
+absent codepoint down the fallback chain. (LVGL's *no-cache* path has a bug that reports absent codepoints
+as *found* — "bug #2" in the knowledge doc — so a `cache_size=0` build would render embedded English as
+blank `.notdef` boxes; no SeedSigner target runs that way, so no patch is carried.)
 
 ### Glyph cache
 
@@ -159,9 +160,9 @@ a pre-proven, signed corpus.
 
 ### Placeholder for out-of-corpus glyphs
 
-`LV_USE_FONT_PLACEHOLDER` draws a box for out-of-corpus codepoints rather than faulting. With the Tiny TTF
-fallback fix applied (bug #2), an absent glyph now defers correctly down the chain and reaches the
-placeholder at the end instead of rendering blank.
+`LV_USE_FONT_PLACEHOLDER` draws a box for out-of-corpus codepoints rather than faulting. With the glyph
+cache on (the default), the cached path defers an absent glyph correctly down the chain so it reaches the
+placeholder at the end instead of rendering blank. (Only the no-cache path has the bug #2 defect.)
 
 ## Cross-References
 

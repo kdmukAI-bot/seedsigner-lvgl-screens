@@ -77,10 +77,11 @@ Independent `(locale)` render runs parallelize cleanly (one process each).
   assert handler turns that into a CPU spin (the former "bug #3" — not a cache/`lv_tiny_ttf` defect). So
   every target provisions memory: Pi Zero `LV_STDLIB_CLIB`, ESP32-S3 glyph bitmaps in PSRAM; a genuinely
   tiny-pool build overrides the size to 0. See `docs/knowledge/tiny-ttf-cache-spin-root-cause.md`.
-- **Tiny TTF no-cache fallback bug FIXED** (`third_party/patches/lv_tiny_ttf-fallback-chain.patch`):
-  absent codepoints now report as *not found*, so the OpenSans fallback engages and embedded English
-  renders at the normal English size. CJK subsets no longer bake in ASCII. Push the fix upstream so the
-  local patch can be dropped. See the knowledge doc (bug #2).
+- **Fallback chain works via the on-by-default glyph cache.** The cached glyph path reports an absent
+  codepoint as *not found*, so the OpenSans fallback engages and embedded English renders at the normal
+  English size; CJK subsets exclude ASCII. LVGL's *no-cache* path has a bug here ("bug #2") but no
+  SeedSigner target runs `cache_size=0`, so the local fix patch was removed — it can be contributed to
+  LVGL upstream on its own later. See the knowledge doc (bug #2).
 - **`main_menu_screen` now takes its title + button labels from JSON** (`top_nav.title` +
   `button_list`), so it localizes; the four icons stay fixed. Defaults reproduce the English home menu
   when called with no context.

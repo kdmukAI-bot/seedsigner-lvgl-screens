@@ -34,8 +34,8 @@ each writes to where its consumer expects it:
 
   Every pack also gets a `manifest.json` with sha256s — production-ready. One `.ttf` serves all
   sizes/resolutions (Tiny TTF rasterizes on demand). Subsets **exclude ASCII** (the compiled-in OpenSans
-  Western baseline covers it; embedded English defers to it via the fallback chain — needs
-  `third_party/patches/lv_tiny_ttf-fallback-chain.patch`).
+  Western baseline covers it; embedded English defers to it via the fallback chain, which works with the
+  glyph cache on — the default).
 - **`gen_localized_scenarios.py`** — translates the `title`/`text`/`status_headline`/`button_list` leaves
   of `tools/scenarios/scenarios.json` via a locale's catalog (English passthrough for non-msgids). Output →
   **`tools/scenarios/localized/<locale>.json`**, which the desktop apps load unchanged. (`en` is the

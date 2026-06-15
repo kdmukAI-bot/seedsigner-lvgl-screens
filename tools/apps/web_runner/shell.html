@@ -425,6 +425,13 @@
     var catalog   = {};   // expanded catalog for the active locale (loaded async)
     var fontCache = {};   // 'locale/file' -> Uint8Array; lets re-register skip re-fetch
     var pendingState = parseUrl();   // deep-link state to restore on first load
+    // Cache-bust runtime-fetched assets (scenarios, fonts, locale index) per page
+    // load. GitHub Pages sends a fixed Cache-Control we can't override, so without
+    // this a redeploy's updated translations/fonts can be served stale from the
+    // browser cache. One token per load → a refresh always fetches fresh; within a
+    // load, fontCache still dedupes repeated registrations. The .wasm/.js bundle
+    // (fixed names) is a separate concern — a hard refresh picks up a rebuilt one.
+    var ASSET_BUST = '?_=' + Date.now();
 
     // Screens are identical across locales (only text differs); repopulate the
     // screen <select> from the current catalog, preserving the selection.
@@ -542,7 +549,7 @@
       for (var i = 0; i < plan.length; i++) {
         var key = locale + '/' + plan[i].file;
         if (!fontCache[key]) {
-          var resp = await fetch('assets/lang-packs/' + locale + '/' + plan[i].file);
+          var resp = await fetch('assets/lang-packs/' + locale + '/' + plan[i].file + ASSET_BUST);
           if (!resp.ok) throw new Error('font ' + plan[i].file + ' (' + resp.status + ')');
           fontCache[key] = new Uint8Array(await resp.arrayBuffer());
         }
@@ -568,7 +575,7 @@
       // Capture the target screen/scenario BEFORE the catalog is swapped.
       var wantScreen   = (restore && restore.screen)   || screenSel.value;
       var wantScenario = (restore && restore.scenario != null) ? restore.scenario : currentScenarioName();
-      return fetch('assets/scenarios/' + locale + '.json')
+      return fetch('assets/scenarios/' + locale + '.json' + ASSET_BUST)
         .then(function (r) { if (!r.ok) throw new Error('scenarios ' + r.status); return r.json(); })
         .then(function (root) {
           catalog = buildCatalog(root);
@@ -587,7 +594,7 @@
     }
 
     function loadLocales() {
-      return fetch('assets/scenarios/locales.json')
+      return fetch('assets/scenarios/locales.json' + ASSET_BUST)
         .then(function (r) { return r.json(); })
         .then(function (list) {
           var codes = [];

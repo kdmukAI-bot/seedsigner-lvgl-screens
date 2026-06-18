@@ -31,7 +31,7 @@ if(NOT DEFINED SUPPORT_DISPLAY_HEIGHT_480)
 endif()
 
 # Repo layout assumptions:
-# - this file lives at seedsigner-c-modules/tools/apps/screenshot_generator
+# - this file lives at seedsigner-lvgl-screens/tools/apps/screenshot_generator
 # - LVGL headers are provided via -DLVGL_ROOT=<path> (preferred), or auto-detected below.
 set(PROJECT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../..")
 set(SEEDSIGNER_DIR "${PROJECT_ROOT}/components/seedsigner")
@@ -106,6 +106,9 @@ set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/gui_constants.cpp"
   "${SEEDSIGNER_DIR}/locale_fonts.cpp"
   "${SEEDSIGNER_DIR}/font_registry.cpp"
+  "${SEEDSIGNER_DIR}/locale_loader.cpp"
+  "${SEEDSIGNER_DIR}/glyph_runs.cpp"
+  "${SEEDSIGNER_DIR}/stb_glyph_metrics.c"
   "${SEEDSIGNER_DIR}/components.cpp"
   "${SEEDSIGNER_DIR}/input_profile.cpp"
   "${SEEDSIGNER_DIR}/navigation.cpp"
@@ -114,6 +117,10 @@ set(SEEDSIGNER_CORE_SOURCES
 
 set(SCREENSHOT_GEN_SOURCE
   "${CMAKE_CURRENT_LIST_DIR}/screenshot_gen.cpp"
+  # THROWAWAY offline-HarfBuzz shaping spike (--shape-spike). shape_spike.cpp
+  # renders pre-shaped glyph runs by glyph-id; it reuses the production
+  # stb_glyph_metrics (promoted to components/seedsigner/) for glyph boxes.
+  "${CMAKE_CURRENT_LIST_DIR}/shape_spike.cpp"
 )
 
 add_executable(screenshot_gen

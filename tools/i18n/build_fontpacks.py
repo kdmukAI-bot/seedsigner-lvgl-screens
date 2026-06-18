@@ -33,7 +33,10 @@ import os
 import subprocess
 import sys
 
-from po_catalog import corpus_chars, parse_entries
+import hb_shaper
+import runs_bin
+import shape_inventory
+from po_catalog import corpus_chars, iter_translations
 
 # This file lives at tools/i18n/; repo root is two levels up.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -57,11 +60,11 @@ def needs_arabic_shaping(symbols):
 
 
 def corpus_text(po_path):
-    """All translated strings (msgstr) joined by newlines. Unlike corpus_chars
-    (a deduped char set) this preserves each string's internal adjacency, which
-    Arabic shaping depends on. Newlines break cross-string joining, matching how
-    the renderer treats them."""
-    return "\n".join(mstr for _mid, mstr in parse_entries(po_path) if mstr)
+    """All translated strings (every plural form) joined by newlines. Unlike
+    corpus_chars (a deduped char set) this preserves each string's internal
+    adjacency, which Arabic shaping depends on. Newlines break cross-string
+    joining, matching how the renderer treats them."""
+    return "\n".join(mstr for _mid, mstr in iter_translations(po_path) if mstr)
 
 
 def ensure_shaper(shaper_bin):
@@ -155,10 +158,14 @@ def manifest_locales(gen_bin, only):
             if only and name not in only:
                 continue
             # px sizes are irrelevant to subsetting; one .ttf serves every size.
-            # unicode_range (script packs) selects block-range vs corpus mode.
+            # unicode_range (script packs) selects block-range vs corpus mode;
+            # shaping/script/rtl select the complex-script (glyph-run) mode.
             locales.setdefault(name, {"source_family": loc["source_family"],
                                       "chain": loc["chain"],
-                                      "unicode_range": loc.get("unicode_range")})
+                                      "unicode_range": loc.get("unicode_range"),
+                                      "shaping": loc.get("shaping", False),
+                                      "script": loc.get("script"),
+                                      "rtl": loc.get("rtl", False)})
     return locales
 
 
@@ -202,6 +209,159 @@ def build_block_range_pack(name, entry, out_dir, assets_dir):
     print(f"[{name}] block-range {unicode_range}  ({len(fonts_meta)} weights, {total} bytes)")
 
 
+def _assert_runs_clean(units, glyph_count, locale):
+    """Hard gate before baking: NO .notdef anywhere (silent tofu) and every gid in
+    range for the shipped subset. A failure means the subset closure is incomplete
+    or a gid escaped the subset — never ship that."""
+    for u in units:
+        runs = []
+        if u["kind"] == "plain":
+            runs = [ln["glyphs"] for ln in u["lines"]]  # each line is {glyphs, breaks}
+        elif u["kind"] == "segmented":
+            runs = [p["glyphs"] for p in u["parts"] if "glyphs" in p]
+        for run in runs:
+            for g in run:
+                if g["gid"] == 0:
+                    raise SystemExit(f"[{locale}] FATAL .notdef in run for {u['msgid']!r} "
+                                     f"(subset closure incomplete)")
+                if not (0 <= g["gid"] < glyph_count):
+                    raise SystemExit(f"[{locale}] FATAL gid {g['gid']} out of range "
+                                     f"(subset has {glyph_count} glyphs) for {u['msgid']!r}")
+
+
+def build_complex_shaping_pack(name, entry, out_dir, assets_dir, translations_dir):
+    """Build a COMPLEX-SCRIPT pack (Devanagari/Thai/Nastaliq/…): a keep-layout
+    subset .ttf + a pre-shaped glyph-run table (runs.json) the device draws by
+    glyph-id. Subset-then-shape with HarfBuzz (hb_shaper); classify each string
+    into plain/segmented/unsupported (shape_inventory). Writes
+    lang-packs/<name>/{<name>.ttf, runs.json, manifest.json}."""
+    po = os.path.join(translations_dir, "l10n", name, "LC_MESSAGES", "messages.po")
+    if not os.path.exists(po):
+        print(f"[{name}] SKIP: no catalog at {po}", file=sys.stderr)
+        return
+    # Every translated form the locale can DISPLAY — the singular plus EACH plural
+    # form (msgstr[0..]; Hindi इनपुट + इनपुट्स, all six Arabic forms). The runtime
+    # picks a form via ngettext, so each must be shaped (its own text-keyed run) and
+    # have its glyphs in the subset, or it tofus. parse_catalog (msgid->msgstr[0])
+    # would silently drop msgstr[1..] — the Deliverable-C gap this closes.
+    entries = list(iter_translations(po))
+    if not entries:
+        print(f"[{name}] SKIP: empty catalog", file=sys.stderr)
+        return
+
+    src = source_ttf(entry["source_family"], assets_dir)
+    if not os.path.exists(src):
+        print(f"[{name}] SKIP: source TTF not found: {src}", file=sys.stderr)
+        return
+
+    script = entry["script"]
+    direction = "rtl" if entry.get("rtl") else "ltr"
+    language = name  # HarfBuzz language tag; locale id is close enough for our set
+
+    # Subset to the corpus KEEPING layout closure, plus HarfBuzz's pre-GSUB
+    # decomposition targets (see hb_shaper.decomposition_closure) so nothing
+    # renders .notdef. Shaping runs against THIS subset so gids match on-device.
+    # The corpus is ALL forms (build_units dedups by text when baking runs).
+    texts = [msgstr for _mid, msgstr in entries]
+    needed = hb_shaper.decomposition_closure(src, texts, script, language, direction)
+
+    loc_out = os.path.join(out_dir, name)
+    os.makedirs(loc_out, exist_ok=True)
+    out_ttf = os.path.join(loc_out, f"{name}.ttf")
+    hb_shaper.subset_keep_layout(src, needed, out_ttf)
+    glyph_count = hb_shaper.subset_glyph_count(out_ttf)
+
+    with open(out_ttf, "rb") as fh:
+        subset_bytes = fh.read()
+
+    # Shape every catalog string against the subset. shape_inventory splits on
+    # '\n', classifies holes, and shapes literal segments; upem is read once.
+    upem = hb_shaper.shape(subset_bytes, ".", script, language, direction)[1]
+    shape_line = lambda t: hb_shaper.shape(subset_bytes, t, script, language, direction)[0]
+    # Per-line wrap marks: ICU dictionary word boundaries (Thai/…) -> glyph indices.
+    break_line = lambda t, glyphs: hb_shaper.line_break_indices(t, glyphs, language, direction)
+    units, report = shape_inventory.build_units(entries, shape_line, break_line)
+
+    _assert_runs_clean(units, glyph_count, name)
+
+    if report["unsupported"]:
+        print(f"[{name}] WARNING: {len(report['unsupported'])} string(s) not shapeable "
+              f"(no run baked) — render layer must handle these:", file=sys.stderr)
+        for mid, reason in report["unsupported"]:
+            print(f"    - {mid!r}: {reason}", file=sys.stderr)
+
+    # runs.json: the pre-shaped run table. Each run carries its translated `text`
+    # (the device keys by text; a representative msgid travels along for debug),
+    # bound to the exact subset via font_sha256. Plural forms each get their own
+    # text-keyed run; only plain/segmented carry runs; unsupported are listed (with
+    # reason) so the gap stays visible but the device can ignore them.
+    font_sha = sha256_file(out_ttf)
+    with_runs = [u for u in units if u["kind"] in ("plain", "segmented")]
+    runs_doc = {
+        "locale": name,
+        "script": script,
+        "direction": direction,
+        "upem": upem,
+        "font": f"{name}.ttf",
+        "font_sha256": font_sha,
+        "harfbuzz_version": hb_shaper.harfbuzz_version(),
+        "icu_version": hb_shaper.icu_version(),
+        "runs": with_runs,
+        "unsupported": [{"msgid": m, "reason": r} for m, r in report["unsupported"]],
+    }
+    runs_path = os.path.join(loc_out, "runs.json")
+    # Deterministic serialization (build_units sorts (msgid, msgstr) and dedups by
+    # text; no timestamps) so two builds of the same inputs are byte-identical.
+    with open(runs_path, "w", encoding="utf-8") as f:
+        json.dump(runs_doc, f, ensure_ascii=False, separators=(",", ":"))
+        f.write("\n")
+
+    # runs.bin: the compact binary blob the DEVICE actually loads (~8 bytes/glyph
+    # vs ~87 for the JSON, and no on-device JSON DOM). runs.json stays on disk as
+    # the human-readable debug + validate_runs.py oracle artifact. Same with_runs
+    # data; deterministic for the same reasons. Format: tools/i18n/runs_bin.py.
+    runs_bin_path = os.path.join(loc_out, "runs.bin")
+    runs_bin_bytes = runs_bin.write_runs_bin(runs_bin_path, with_runs, upem, direction, name)
+
+    manifest_out = {
+        "locale": name,
+        "source_family": entry["source_family"],
+        "chain": entry["chain"],
+        "shaping": True,
+        "script": script,
+        "rtl": bool(entry.get("rtl")),
+        "corpus_glyphs": glyph_count,
+        "font": {
+            "file": f"{name}.ttf",
+            "source_ttf": os.path.relpath(src, REPO_ROOT),
+            "bytes": os.path.getsize(out_ttf),
+            "sha256": font_sha,
+        },
+        "runs": {
+            # The device loads runs.bin; runs.json is the debug/oracle mirror.
+            "file": "runs.bin",
+            "sha256": sha256_file(runs_bin_path),
+            "bytes": runs_bin_bytes,
+            "debug_json": "runs.json",
+            "plain": report["plain"],
+            "segmented": report["segmented"],
+            "ascii_passthrough": report["ascii"],
+            "unsupported": len(report["unsupported"]),
+        },
+        "harfbuzz_version": hb_shaper.harfbuzz_version(),
+    }
+    with open(os.path.join(loc_out, "manifest.json"), "w") as f:
+        json.dump(manifest_out, f, indent=2)
+    # Plural-form coverage: how many distinct translated forms beyond one-per-msgid
+    # (the Deliverable-C ingest). 0 for nplurals=1 locales (Thai) or stubs (ur).
+    extra_forms = len(entries) - len({mid for mid, _ in entries})
+    print(f"[{name}] {name}.ttf ({glyph_count} glyphs, {os.path.getsize(out_ttf)} bytes) + "
+          f"runs.bin ({runs_bin_bytes} bytes, json {os.path.getsize(runs_path)}) "
+          f"(plain={report['plain']} segmented={report['segmented']} "
+          f"ascii={report['ascii']} unsupported={len(report['unsupported'])} "
+          f"plural_forms=+{extra_forms})")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -230,6 +390,14 @@ def main():
         return 1
 
     for name, entry in locales.items():
+        # Complex-script packs (Devanagari/Thai/Nastaliq/…): keep-layout subset +
+        # offline HarfBuzz glyph-run table. Routed by the render layer's `shaping`
+        # flag (single source of truth), NOT a Python script-block guess.
+        if entry.get("shaping"):
+            build_complex_shaping_pack(name, entry, args.out_dir, args.assets_dir,
+                                       args.translations_dir)
+            continue
+
         # Script packs (Greek/Cyrillic/Vietnamese): block-range subset, no .po.
         if entry.get("unicode_range"):
             build_block_range_pack(name, entry, args.out_dir, args.assets_dir)

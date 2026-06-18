@@ -4,6 +4,8 @@
 #include "navigation.h"
 #include "input_profile.h"
 #include "font_registry.h"
+#include "glyph_runs.h"
+#include "locale_loader.h"   // ss_reap_retired() after the old screen is deleted
 
 #include "lvgl.h"
 
@@ -117,10 +119,29 @@ static void load_screen_and_cleanup_previous(lv_obj_t *new_screen) {
     if (seedsigner_locale_is_rtl()) {
         apply_rtl_text_to_labels(new_screen);
     }
+    // Complex-script hook: for shaping locales (Devanagari/Thai/Nastaliq), replace
+    // matched labels' codepoint text with their pre-shaped glyph runs. Runs after
+    // RTL: a matched label's codepoint text is suppressed (text_opa TRANSP), so the
+    // base_dir set above is moot for it and the visual-order run is never re-reordered.
+    // Force layout first so each label's final content width is available — the
+    // glyph-run word-wrap fits long lines to it.
+    lv_obj_update_layout(new_screen);
+    apply_glyph_runs_to_labels(new_screen);
+
     lv_obj_t *old_screen = lv_scr_act();
     lv_scr_load(new_screen);
     if (old_screen && old_screen != new_screen) {
         lv_obj_delete(old_screen);
+
+        // The old screen is gone, so any script fonts a locale switch retired
+        // (detached but kept alive precisely because this screen's labels still
+        // pointed at them) are now unreferenced and safe to destroy. On a switch,
+        // the new screen above was built with the freshly registered fonts, never
+        // the retired ones. A no-op for plain same-locale navigation. This is the
+        // single point where retired fonts are reclaimed — see
+        // seedsigner_clear_registered_fonts() / ss_unload_locale() for why freeing
+        // them any earlier would dangle the old screen's labels.
+        ss_reap_retired();
     }
 }
 

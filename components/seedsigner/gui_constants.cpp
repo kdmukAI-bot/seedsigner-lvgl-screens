@@ -11,8 +11,11 @@ static int px_scale(int base, int multiplier) {
 }
 
 // ---------------------------------------------------------------------------
-// Font selection by multiplier. Font files are named by their multiplier value:
-// unsuffixed = PX_MULTIPLIER_100, _150x = PX_MULTIPLIER_150.
+// Font selection by multiplier. Font files are named by a multiplier suffix:
+// unsuffixed = PX_MULTIPLIER_100, _200x = PX_MULTIPLIER_200. The _150x suffix is
+// a LEGACY label: those files now hold the PX_MULTIPLIER_133 (320px-height)
+// fonts, sized at the 133 ratio (kept under the old name to avoid churning
+// downstream build lists — see gui_constants.h).
 // ---------------------------------------------------------------------------
 struct FontSet {
     const lv_font_t* main_menu_title;
@@ -49,17 +52,18 @@ static FontSet fonts_for_multiplier(int px_mult) {
     }
 #endif
 #ifdef SUPPORT_DISPLAY_HEIGHT_320
-    if (px_mult == PX_MULTIPLIER_150) {
+    if (px_mult == PX_MULTIPLIER_133) {
+        // _150x files now hold 133-scaled fonts (= base x 320/240). See gui_constants.h.
         return {
             nullptr,  // main_menu_title  } OpenSans Western TTF,
             nullptr,  // title            } installed per-role by
             nullptr,  // large_button     } set_display() once LVGL
             nullptr,  // button           } is initialized.
             nullptr,  // body             }
-            &seedsigner_icons_24_4bpp_150x,
-            &seedsigner_icons_36_4bpp_150x,   // icon_large unchanged
-            &seedsigner_icons_48_4bpp_150x,   // icon_primary_screen = 72px
-            &inconsolata_semibold_24_4bpp_150x,  // keyboard = 33px (eased from 36 so glyphs clear the key edges at 320h)
+            &seedsigner_icons_24_4bpp_150x,      // icon          = 32px (24 x 1.333)
+            &seedsigner_icons_36_4bpp_150x,      // icon_large    = 48px (36 x 1.333)
+            &seedsigner_icons_48_4bpp_150x,      // icon_primary  = 64px (48 x 1.333)
+            &inconsolata_semibold_24_4bpp_150x,  // keyboard      = 32px (24 x 1.333)
         };
     }
 #endif
@@ -86,7 +90,7 @@ static DisplayProfile make_profile(int width, int height) {
     int px_mult;
     switch (height) {
         case 240: px_mult = PX_MULTIPLIER_100; break;
-        case 320: px_mult = PX_MULTIPLIER_150; break;
+        case 320: px_mult = PX_MULTIPLIER_133; break;
         case 480: px_mult = PX_MULTIPLIER_200; break;
         default:
             fprintf(stderr, "FATAL: no PX_MULTIPLIER for height=%d\n", height);

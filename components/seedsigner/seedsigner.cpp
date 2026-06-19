@@ -153,22 +153,21 @@ static void load_screen_and_cleanup_previous(lv_obj_t *new_screen) {
 static lv_obj_t* create_standard_body_content(lv_obj_t *screen, lv_obj_t *top_nav_obj, bool scrollable) {
     lv_obj_t* body_content = lv_obj_create(screen);
 
-    // The top_nav vertically centers its buttons, leaving a gap between a button's
-    // bottom edge and TOP_NAV_HEIGHT. Make that gap part of the BODY rather than
-    // the top_nav: extend the body up to the button's bottom edge and add an equal
-    // DEFAULT top buffer, so ordinary content still begins at TOP_NAV_HEIGHT while
-    // the body now owns the gap. Layouts that need to nudge an element a little
-    // higher (e.g. the large-icon status screen's hero icon, which Python overlaps
-    // up into the nav) can RELAX this buffer instead of overflowing the body clip.
-    int32_t tn_gap = (TOP_NAV_HEIGHT - TOP_NAV_BUTTON_SIZE) / 2;
-
+    // The body sits directly below the full top_nav (TOP_NAV_HEIGHT tall) and clips
+    // at TOP_NAV_HEIGHT. The top_nav vertically centers its buttons, so the space
+    // between a button's bottom edge and TOP_NAV_HEIGHT is a visual buffer OWNED BY
+    // THE TOP_NAV: scrolling body content clips at TOP_NAV_HEIGHT and never renders
+    // up against the back/power buttons — the buffer stays between the nav and the
+    // moving content. (An earlier revision pushed this buffer down into the body so
+    // a screen could overlap an element up into the nav, but that let scrolled
+    // content collide with the nav buttons; the buffer belongs to the top_nav.)
     lv_obj_set_size(body_content, lv_obj_get_width(screen),
-                    lv_obj_get_height(screen) - TOP_NAV_HEIGHT + tn_gap);
-    lv_obj_align_to(body_content, top_nav_obj, LV_ALIGN_OUT_BOTTOM_MID, 0, -tn_gap);
+                    lv_obj_get_height(screen) - TOP_NAV_HEIGHT);
+    lv_obj_align_to(body_content, top_nav_obj, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(body_content, lv_color_hex(BACKGROUND_COLOR), LV_PART_MAIN);
     lv_obj_set_style_pad_left(body_content, EDGE_PADDING, LV_PART_MAIN);
     lv_obj_set_style_pad_right(body_content, EDGE_PADDING, LV_PART_MAIN);
-    lv_obj_set_style_pad_top(body_content, tn_gap, LV_PART_MAIN);   // default buffer == the old top_nav bottom gap
+    lv_obj_set_style_pad_top(body_content, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_bottom(body_content, COMPONENT_PADDING, LV_PART_MAIN);
     lv_obj_set_style_border_width(body_content, 0, LV_PART_MAIN);
     lv_obj_set_scroll_dir(body_content, LV_DIR_VER);
@@ -231,21 +230,41 @@ static size_t nav_initial_index_from_cfg(const json &cfg, size_t default_index) 
 // Screens provide only focusables/layout/default body index; this helper applies
 // top-nav wiring, aux-key policy, mode override, and binds nav in one place.
 //
-// `scroll_obj` / `scroll_then_buttons` are an opt-in (default off): a screen whose
-// body content overflows the viewport passes the scrollable body so the joystick
-// nav inserts a scroll step before the bottom button (see navigation.h). All other
-// call sites omit them and keep the plain top-nav<->body flow.
+// Scroll-then-buttons joystick navigation (see navigation.h) is enabled
+// AUTOMATICALLY here — no per-screen opt-in. The trigger is a vertical screen with
+// non-focusable upper content (a separate, populated `upper_body`) above its
+// buttons whose body overflows the viewport: e.g. an overflowing
+// large_icon_status_screen, or a button_list_screen with intro text. A pure button
+// list (upper_body == body) is excluded — it scrolls via item-focus navigation —
+// as are grid layouts (main_menu) and screens that never call this helper
+// (seed_add_passphrase, screensaver).
 static void bind_screen_navigation(const json &cfg,
                                    const screen_scaffold_t &screen,
                                    lv_obj_t **body_items,
                                    size_t body_item_count,
                                    nav_body_layout_t body_layout,
-                                   size_t default_initial_index,
-                                   lv_obj_t *scroll_obj = nullptr,
-                                   bool scroll_then_buttons = false) {
+                                   size_t default_initial_index) {
     bool has_input_mode_override = false;
     input_mode_t input_mode_override = INPUT_MODE_TOUCH;
     nav_mode_override_from_cfg(cfg, has_input_mode_override, input_mode_override);
+
+    // Auto-detect scroll-then-buttons: a vertical screen with a separate, populated
+    // upper_body (non-focusable content above the buttons) whose body overflows the
+    // viewport. lv_obj_update_layout forces geometry so lv_obj_get_scroll_bottom is
+    // accurate; it runs only for screens with such upper content, so pure button
+    // lists (upper_body == body) and grids pay nothing and stay byte-identical.
+    lv_obj_t *scroll_obj = nullptr;
+    bool scroll_then_buttons = false;
+    if (body_layout == NAV_BODY_VERTICAL &&
+        body_item_count > 0 &&
+        screen.upper_body && screen.upper_body != screen.body &&
+        lv_obj_get_child_cnt(screen.upper_body) > 0) {
+        lv_obj_update_layout(screen.body);
+        if (lv_obj_get_scroll_bottom(screen.body) > 0) {
+            scroll_obj = screen.body;
+            scroll_then_buttons = true;
+        }
+    }
 
     nav_config_t nav_cfg;
     nav_cfg.screen = screen.screen;
@@ -293,22 +312,28 @@ static bool read_button_list_labels(const json &cfg, std::vector<std::string> &o
 // present) a flex-column body that stacks `upper_body`, an optional
 // flex-grow=1 spacer, and one button per `cfg["button_list"]` label.
 //
-// Three usage patterns:
+// Usage patterns:
 //
-// 1. No button_list (e.g. `main_menu_screen`, `screensaver_screen`,
-//    `demo_screen`): the body is the existing non-flex container,
-//    `upper_body == body`, no scaffold-managed buttons.
+// 1. No button_list (e.g. `main_menu_screen`, `screensaver_screen`):
+//    the body is the existing non-flex container, `upper_body == body`,
+//    no scaffold-managed buttons.
 //
-// 2. button_list present, is_bottom_list omitted/false (legacy
-//    `button_list_screen` behavior): vertical-flex body with
-//    `upper_body` (LV_SIZE_CONTENT, height 0 if nothing added) followed
-//    directly by buttons. Buttons stack from the top.
+// 2. button_list present, no upper content (is_bottom_list omitted/false
+//    AND no `cfg["text"]`): the legacy pure-list path — top-aligned
+//    `button()` chain in a plain body, `upper_body == body`. Kept
+//    byte-identical to the original `button_list_screen`. Such a list
+//    scrolls (when it overflows) via item-focus navigation, not a
+//    page-scroll step.
 //
-// 3. button_list present, is_bottom_list=true (status / confirmation
-//    screens): same as #2 plus a flex-grow=1 spacer between
-//    `upper_body` and the first button. Buttons pin to the viewport
-//    bottom while content fits; the spacer collapses and content/buttons
-//    flow together when content overflows.
+// 3. button_list present WITH upper content — i.e. is_bottom_list=true
+//    (status / confirmation screens) OR `cfg["text"]` provides intro text
+//    above the buttons: a vertical-flex body with a SEPARATE `upper_body`
+//    (LV_SIZE_CONTENT) followed by the buttons. `is_bottom_list` adds a
+//    flex-grow=1 spacer between `upper_body` and the first button so the
+//    buttons pin to the viewport bottom while content fits (collapsing on
+//    overflow); intro-text-only lists omit the spacer so the buttons flow
+//    directly under the text. When the body overflows, bind_screen_navigation
+//    auto-enables scroll-then-buttons joystick navigation (see navigation.h).
 //
 // Screens always populate `scaffold.upper_body` (or `scaffold.body` in
 // case #1, where they're the same object) and finish with
@@ -363,12 +388,20 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
         throw std::runtime_error("button_list exceeds SEEDSIGNER_SCAFFOLD_MAX_BUTTONS");
     }
 
-    // Mode 2 (legacy button list, no bottom pinning): preserve byte-identical
-    // rendering with the prior `button_list_screen` implementation by using
-    // the existing `button_list()` helper (top-aligned, manual chain-align).
-    // `upper_body` aliases `body` so any future caller can still add content
-    // — its widgets will simply share the body container with the buttons.
-    if (!is_bottom_list) {
+    // Does this button list carry intro text above the buttons? If so it needs a
+    // separate `upper_body` (the flex path below) even when not bottom-pinned, so
+    // the text can be read by scrolling and the joystick nav can hand off to the
+    // buttons. (The screen renders the text into upper_body; the scaffold only
+    // builds the structure.)
+    bool has_intro_text = cfg.contains("text") && cfg["text"].is_string() &&
+                          !cfg["text"].get<std::string>().empty();
+
+    // Mode 2 (pure button list — no bottom pinning, no intro text): preserve
+    // byte-identical rendering with the prior `button_list_screen` implementation
+    // by using the existing `button_list()` helper (top-aligned, manual
+    // chain-align). `upper_body` aliases `body`. Overflow is handled by item-focus
+    // navigation (scroll_to_view), so this path gets NO page-scroll step.
+    if (!is_bottom_list && !has_intro_text) {
         std::vector<button_list_item_t> items;
         items.reserve(button_labels.size());
         for (const auto &label : button_labels) {
@@ -392,10 +425,13 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
         return out;
     }
 
-    // Mode 3: bottom-pinned button list. Switch body to a vertical flex
+    // Modes 3 & 4: button list WITH upper content. Switch body to a vertical flex
     // column with children:
     //   [0]   upper_body (LV_SIZE_CONTENT, owned by caller)
-    //   [1]   flex-grow=1 spacer (collapses when upper_body overflows)
+    //   [1]   flex-grow=1 spacer — ONLY when is_bottom_list (Mode 3); pins the
+    //         buttons to the viewport bottom while content fits and collapses on
+    //         overflow. Intro-text-only lists (Mode 4) omit it so the buttons flow
+    //         directly under the text.
     //   [...] one button per cfg.button_list label
     //
     // Row-gap of LIST_ITEM_PADDING produces the same inter-button spacing as
@@ -417,14 +453,16 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
     lv_obj_set_flex_flow(out.upper_body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(out.upper_body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    out.button_list_spacer = lv_obj_create(out.body);
-    lv_obj_set_width(out.button_list_spacer, lv_pct(100));
-    lv_obj_set_height(out.button_list_spacer, 0);
-    lv_obj_set_flex_grow(out.button_list_spacer, 1);
-    lv_obj_set_style_bg_opa(out.button_list_spacer, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(out.button_list_spacer, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(out.button_list_spacer, 0, LV_PART_MAIN);
-    lv_obj_remove_flag(out.button_list_spacer, LV_OBJ_FLAG_SCROLLABLE);
+    if (is_bottom_list) {
+        out.button_list_spacer = lv_obj_create(out.body);
+        lv_obj_set_width(out.button_list_spacer, lv_pct(100));
+        lv_obj_set_height(out.button_list_spacer, 0);
+        lv_obj_set_flex_grow(out.button_list_spacer, 1);
+        lv_obj_set_style_bg_opa(out.button_list_spacer, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(out.button_list_spacer, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(out.button_list_spacer, 0, LV_PART_MAIN);
+        lv_obj_remove_flag(out.button_list_spacer, LV_OBJ_FLAG_SCROLLABLE);
+    }
 
     for (size_t i = 0; i < button_labels.size(); ++i) {
         // `button()`'s second arg is unused under flex layout — flex
@@ -482,11 +520,15 @@ void demo_screen(void *ctx)
 }
 
 
-// Render a screen whose body is just a vertical list of buttons.
+// Render a screen whose body is a vertical list of buttons, optionally preceded
+// by an intro-text block (`cfg["text"]`).
 //
-// The scaffold builds the buttons from `cfg["button_list"]`; this function
-// only needs to validate the required key, wire navigation, and load the
-// screen.
+// The scaffold builds the buttons from `cfg["button_list"]`; when `cfg["text"]`
+// is present it also gives us a separate `upper_body` (above the buttons) for the
+// text. This function validates the required key, renders any intro text, wires
+// navigation, and loads the screen. When intro text overflows the viewport,
+// bind_screen_navigation auto-enables scroll-then-buttons joystick navigation:
+// the text scrolls into view before the first button takes focus.
 void button_list_screen(void *ctx_json)
 {
     const char *json_str = (const char *)ctx_json;
@@ -498,6 +540,23 @@ void button_list_screen(void *ctx_json)
     }
 
     screen_scaffold_t screen = create_top_nav_screen_scaffold(cfg, true);
+
+    // Optional intro text above the buttons. The scaffold gave us a separate
+    // upper_body (Mode 4) whenever cfg["text"] is a non-empty string; render the
+    // text into it. Wraps to the upper_body content width and uses the standard
+    // body font/color; line spacing is the screen's inherited default.
+    if (cfg.contains("text") && cfg["text"].is_string()) {
+        std::string text = cfg["text"].get<std::string>();
+        if (!text.empty() && screen.upper_body && screen.upper_body != screen.body) {
+            lv_obj_t *intro = lv_label_create(screen.upper_body);
+            lv_label_set_text(intro, text.c_str());
+            lv_label_set_long_mode(intro, LV_LABEL_LONG_WRAP);
+            lv_obj_set_width(intro, lv_obj_get_content_width(screen.upper_body));
+            lv_obj_set_style_text_align(intro, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+            lv_obj_set_style_text_color(intro, lv_color_hex(BODY_FONT_COLOR), LV_PART_MAIN);
+            lv_obj_set_style_text_font(intro, &BODY_FONT, LV_PART_MAIN);
+        }
+    }
 
     bind_screen_navigation(
         cfg,
@@ -806,18 +865,10 @@ void large_icon_status_screen(void *ctx_json) {
     // Most status screens fit the viewport and never scroll. But a tall body
     // (long warning text on a small display) can push the bottom button off-screen,
     // so KEEP the body scrollable (the scaffold already set scroll_dir=VER +
-    // SCROLLBAR_MODE_AUTO): touch gets native drag-to-scroll, and overflow is
-    // detected below to opt the joystick nav into scroll-then-button stepping. When
-    // content fits, scroll_bottom == 0 — the scrollbar stays hidden and behavior is
-    // byte-identical to before.
-
-    // Relax the body's default top buffer (the former top_nav bottom gap, now
-    // owned by the body — see create_standard_body_content) by COMPONENT_PADDING/2
-    // so the hero icon overlaps up into the nav exactly as Python does
-    // (status_icon.screen_y = top_nav.height - COMPONENT_PADDING/2). The icon stays
-    // ENTIRELY within the body's box, so nothing clips — no overflow tricks needed.
-    int32_t tn_gap = (TOP_NAV_HEIGHT - TOP_NAV_BUTTON_SIZE) / 2;
-    lv_obj_set_style_pad_top(screen.body, tn_gap - COMPONENT_PADDING / 2, LV_PART_MAIN);
+    // SCROLLBAR_MODE_AUTO): touch gets native drag-to-scroll, and bind_screen_
+    // navigation auto-detects overflow to opt the joystick nav into scroll-then-
+    // button stepping. When content fits, scroll_bottom == 0 — the scrollbar stays
+    // hidden and the flow is the plain one.
 
     // Zero upper_body's flex row-gap so the icon->headline spacing is ONLY the
     // headline's COMPONENT_PADDING/2 top margin (matching Python's
@@ -826,9 +877,12 @@ void large_icon_status_screen(void *ctx_json) {
 
     // Hero icon — colored, centered, sized from the active display profile.
     // upper_body's flex layout (column, cross-axis center) handles centering. The
-    // icon needs no margin: the relaxed body buffer above already starts the
-    // content at top_nav.height - COMPONENT_PADDING/2 (Python's anchor), and the
-    // glyph fits its label box exactly (box_h == line_height), so it renders whole.
+    // icon needs no margin: the body's default pad_top is 0, so the icon renders at
+    // the first available body pixel — just below the top_nav's bottom buffer — and
+    // the glyph fits its label box exactly (box_h == line_height), so it renders
+    // whole (no clip). This sits ~COMPONENT_PADDING/2 below Python's anchor
+    // (top_nav.height - COMPONENT_PADDING/2); the trade keeps the top_nav buffer
+    // visible while the body scrolls beneath it.
     lv_obj_t *icon = lv_label_create(screen.upper_body);
     lv_label_set_text(icon, defaults.icon);
     lv_obj_set_style_text_font(icon, &ICON_PRIMARY_SCREEN_FONT__SEEDSIGNER, LV_PART_MAIN);
@@ -921,23 +975,35 @@ void large_icon_status_screen(void *ctx_json) {
         add_warning_edges_overlay(screen.screen, defaults.color);
     }
 
-    // Detect overflow now that all content is built: force a layout pass, then ask
-    // the body whether anything sits below the viewport. The flex-grow spacer
-    // collapses to 0 when content overflows, so the button lands directly below the
-    // text and defines scroll_bottom. Only opt the joystick nav into scrolling when
-    // there is genuine overflow AND the scaffold gave us a bottom-list spacer.
+    // Reclaim-only-as-needed: if the content overflows by no more than the top_nav's
+    // bottom buffer (tn_gap), pull the whole body up by exactly that overflow so it
+    // FITS without scrolling — the icon/headline/text rise a few px into the buffer
+    // region while the bottom button and its padding stay put. The body keeps its
+    // bottom edge, so only the top is reclaimed. Because we pull up by the exact
+    // overflow, the result fits (scroll_bottom -> 0) and never scrolls, so scrolled
+    // content can never collide with the nav. A larger overflow (> tn_gap can't be
+    // hidden in the buffer) is left alone: the icon stays at the default position and
+    // the screen scrolls cleanly under the full buffer (bind_screen_navigation then
+    // enables scroll-then-buttons). The two cases are mutually exclusive.
     lv_obj_update_layout(screen.body);
-    bool body_overflows = lv_obj_get_scroll_bottom(screen.body) > 0 && screen.button_list_spacer;
+    int32_t overflow = lv_obj_get_scroll_bottom(screen.body);
+    int32_t tn_gap = (TOP_NAV_HEIGHT - TOP_NAV_BUTTON_SIZE) / 2;
+    if (overflow > 0 && overflow <= tn_gap) {
+        lv_obj_set_height(screen.body, lv_obj_get_height(screen.body) + overflow);
+        lv_obj_align_to(screen.body, screen.top_nav, LV_ALIGN_OUT_BOTTOM_MID, 0, -overflow);
+    }
 
+    // bind_screen_navigation auto-detects any remaining body overflow (a long
+    // warning that even a full reclaim can't fit) and enables scroll-then-buttons
+    // joystick navigation. After a successful reclaim the content fits, so nothing
+    // scrolls and the flow is the plain top-nav<->button one.
     bind_screen_navigation(
         cfg,
         screen,
         screen.button_list_count > 0 ? screen.button_list : NULL,
         screen.button_list_count,
         NAV_BODY_VERTICAL,
-        0,
-        body_overflows ? screen.body : nullptr,
-        body_overflows
+        0
     );
 
     load_screen_and_cleanup_previous(screen.screen);

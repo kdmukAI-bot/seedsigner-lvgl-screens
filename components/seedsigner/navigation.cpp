@@ -97,17 +97,30 @@ static size_t grid_move(size_t current, size_t body_count, size_t cols, uint32_t
 // Body scroll step (joystick-driven scrolling for NAV_ZONE_SCROLL)
 //
 // Scrolls ctx->scroll_obj by one step (75% of the viewport, animated) toward the
-// requested direction, then reports whether MORE range remains after the step:
-//   true  -> there is still content to scroll; the caller stays in NAV_ZONE_SCROLL.
-//   false -> this step reached the edge (or there was nothing to scroll); the
-//            caller advances out of the scroll zone on the SAME keypress — onto the
-//            first body button (DOWN) or the top-nav back button (UP). Returning
-//            false on the exhausting step is what avoids a "dead" extra press at
-//            each end: the press that finishes the scroll also moves the focus.
+// requested direction, then reports whether MORE scrolling remains:
+//   true  -> there is still content to reveal; the caller stays in NAV_ZONE_SCROLL.
+//   false -> the relevant edge is within one step; the caller advances out of the
+//            scroll zone on the SAME keypress — onto the first body button (DOWN)
+//            or the top-nav back button (UP). Returning false on the exhausting
+//            step avoids a "dead" extra press at each end: the press that finishes
+//            the scroll also moves the focus.
+//
+// DOWN target — the FIRST focusable body item, not the content bottom. The point
+// of scroll-then-buttons is to read the non-focusable upper content (status text,
+// or a button list's intro text) and then hand off to item navigation. Stopping
+// at the first body item is what makes this work for a MULTI-button list under
+// intro text: scrolling all the way to scroll_bottom would skip past the first
+// buttons to the last one. Once item 0 is reached the caller focuses it and
+// update_visual_focus()'s scroll_to_view() walks the rest of the list. For a
+// single bottom-pinned button (large_icon_status_screen) item 0 sits at the very
+// bottom, so "first item in view" coincides with scrolling to the bottom — that
+// screen's behavior is unchanged.
+//
+// UP target — the top of the content; exhausting it surfaces the top-nav.
 //
 // LVGL scroll-by convention: a NEGATIVE dy reveals lower content ("scroll down").
-// LVGL clamps to the content bounds, so the step is always safe; lv_obj_get_scroll_
-// top/bottom report the remaining range above / below the current viewport.
+// LVGL clamps to the content bounds, so every step is safe; lv_obj_get_scroll_
+// top/bottom report the range above / below the current viewport.
 // ---------------------------------------------------------------------------
 
 static bool nav_scroll_step(nav_ctx_t *ctx, bool down) {
@@ -116,19 +129,37 @@ static bool nav_scroll_step(nav_ctx_t *ctx, bool down) {
     int32_t step = (lv_obj_get_height(ctx->scroll_obj) * 3) / 4;
     if (step < 1) step = 1;
 
-    int32_t range = down ? lv_obj_get_scroll_bottom(ctx->scroll_obj)
-                         : lv_obj_get_scroll_top(ctx->scroll_obj);
-    if (range <= 0) return false;   // already at the edge: nothing scrolled
+    if (!down) {
+        // Scroll up toward the top. Clamp the last step to the exact remaining
+        // range so it lands precisely at the top (no elastic over-scroll gap).
+        int32_t range = lv_obj_get_scroll_top(ctx->scroll_obj);
+        if (range <= 0) return false;   // already at the top: nothing scrolled
+        int32_t move = step < range ? step : range;
+        lv_obj_scroll_by(ctx->scroll_obj, 0, move, LV_ANIM_ON);
+        return range > step;
+    }
 
-    // Clamp the LAST step to the exact remaining range so it lands precisely on the
-    // edge. A full step would ask LVGL to scroll past the boundary, and with the
-    // body's elastic over-scroll that leaves a visible gap above/below the content
-    // (the icon pushed down from the true top). Moving exactly `range` lands at 0 /
-    // max with no over-shoot.
+    int32_t range = lv_obj_get_scroll_bottom(ctx->scroll_obj);
+    if (range <= 0) return false;   // already at the bottom: nothing scrolled
+
+    // How far below the viewport bottom does the first body item's top edge still
+    // sit? When that gap is within one step, the next step would reveal the item:
+    // stop scrolling and hand off, letting the caller focus item 0 and
+    // scroll_to_view() land it precisely (which also lands the lone status-screen
+    // button exactly at the bottom, no over-scroll gap).
+    int32_t needed = range;   // fallback (no items): scroll to the content bottom
+    if (ctx->body_items && ctx->body_count > 0 && ctx->body_items[0]) {
+        lv_area_t item_coords, view_coords;
+        lv_obj_get_coords(ctx->body_items[0], &item_coords);
+        lv_obj_get_coords(ctx->scroll_obj, &view_coords);
+        needed = item_coords.y1 - view_coords.y2;
+        if (needed < 0) needed = 0;   // item already in (or above) the viewport
+    }
+    if (needed <= step) return false;
+
     int32_t move = step < range ? step : range;
-    lv_obj_scroll_by(ctx->scroll_obj, 0, down ? -move : move, LV_ANIM_ON);
-
-    return range > step;            // more left only if the range exceeded one step
+    lv_obj_scroll_by(ctx->scroll_obj, 0, -move, LV_ANIM_ON);
+    return true;
 }
 
 

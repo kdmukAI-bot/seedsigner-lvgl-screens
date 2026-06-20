@@ -482,44 +482,6 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
 }
 
 
-void demo_screen(void *ctx)
-{
-    (void)ctx;
-
-    json cfg = {
-        {"top_nav", {
-            {"title", "Home"},
-            {"show_back_button", false},
-            {"show_power_button", true},
-        }}
-    };
-    screen_scaffold_t screen = create_top_nav_screen_scaffold(cfg, true);
-    lv_obj_t *scr = screen.screen;
-    lv_obj_t *body_content = screen.body;
-
-    // debugging
-    // lv_obj_set_style_border_color(body_content, lv_color_hex(BUTTON_BACKGROUND_COLOR), LV_PART_MAIN);
-
-    static const button_list_item_t demo_buttons[] = {
-        { .label = "Language", .value = NULL },
-        { .label = "Persistent Settings", .value = NULL },
-        { .label = "Another option", .value = NULL },
-        { .label = "Wow so many options", .value = NULL },
-        { .label = "Continue", .value = NULL },
-    };
-    lv_obj_t* lv_seedsigner_button = button_list(body_content, demo_buttons, sizeof(demo_buttons) / sizeof(demo_buttons[0]));
-
-    lv_obj_t* lv_body_text = lv_label_create(body_content);
-    lv_obj_set_width(lv_body_text, lv_obj_get_width(body_content) - 2 * COMPONENT_PADDING);
-    lv_obj_align_to(lv_body_text, lv_seedsigner_button, LV_ALIGN_OUT_BOTTOM_LEFT, 0, COMPONENT_PADDING);
-    lv_obj_set_style_text_color(lv_body_text, lv_color_hex(BODY_FONT_COLOR), 0);
-    lv_obj_set_style_text_font(lv_body_text, &BODY_FONT, LV_PART_MAIN);
-    lv_label_set_text(lv_body_text, "Long the Paris streets, the death-carts rumble, hollow and harsh. Six tumbrils carry the day's wine to La Guillotine. All the devouring and insatiate Monsters imagined since imagination could record itself, are fused in the one realisation, Guillotine. And yet there is not in France, with its rich variety of soil and climate, a blade, a leaf, a root, a sprig, a peppercorn, which will grow to maturity under conditions more certain than those that have produced this horror. Crush humanity out of shape once more, under similar hammers, and it will twist itself into the same tortured forms. Sow the same seed of rapacious license and oppression over again, and it will surely yield the same fruit according to its kind.\n\nSix tumbrils roll along the streets. Change these back again to what they were, thou powerful enchanter, Time, and they shall be seen to be the carriages of absolute monarchs, the equipages of feudal nobles, the toilettes of flaring Jezebels, the churches that are not my Father's house but dens of thieves, the huts of millions of starving peasants! No; the great magician who majestically works out the appointed order of the Creator, never reverses his transformations. \"If thou be changed into this shape by the will of God,\" say the seers to the enchanted, in the wise Arabian stories, \"then remain so! But, if thou wear this form through mere passing conjuration, then resume thy former aspect!\" Changeless and hopeless, the tumbrils roll along.");
-
-    load_screen_and_cleanup_previous(scr);
-}
-
-
 // Render a screen whose body is a vertical list of buttons, optionally preceded
 // by an intro-text block (`cfg["text"]`).
 //

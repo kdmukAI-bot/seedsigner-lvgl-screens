@@ -66,7 +66,6 @@ typedef struct {
 #define SEEDSIGNER_RET_SCREENSAVER_DISMISS  1100u  // host-handled, not Python-routed
 
 // Screens
-void demo_screen(void *ctx);
 void button_list_screen(void *ctx_json);
 void main_menu_screen(void *ctx);
 void screensaver_screen(void *ctx_json);

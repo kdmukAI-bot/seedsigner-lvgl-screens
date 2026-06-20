@@ -746,12 +746,16 @@ static int32_t tight_line_space(const lv_font_t *font, const char *text, int32_t
     int32_t space   = advance - line_h;
 
     // Safety floor on how far we tighten. Per-codepoint measurement is exact for
-    // simple LTR scripts but UNDER-counts scripts whose on-screen glyphs differ
+    // simple LTR scripts but can UNDER-count scripts whose on-screen glyphs differ
     // from their source codepoints (Arabic/Farsi presentation-form shaping):
     // there the measured ink is far too small and an unclamped advance would
     // collapse the lines on top of each other. Never remove more than a quarter
     // of the font's declared line_height — enough to strip loose leading on
     // well-measured fonts, but a guard against collapse on the rest.
+    // NOTE: callers in large_icon_status_screen now pass lv_label_get_text() (the
+    // AP-processed presentation forms actually drawn), so fa measures correctly and
+    // no longer hits this floor — it is now insurance against future divergence,
+    // not the active correction it once was for fa.
     int32_t min_space = -(line_h / 4);
     if (space < min_space) {
         space = min_space;
@@ -923,7 +927,14 @@ void large_icon_status_screen(void *ctx_json) {
             // headline's VISIBLE top. The label adds top leading above the caps
             // that PIL does not, so subtract it — otherwise the gap reads ~2x too
             // big and cascades down, jamming the bottom button against the edge.
-            int32_t hl_lead = text_top_leading(&BODY_FONT, headline.c_str());
+            // Measure the label's STORED text, not the logical `headline`: with
+            // LV_USE_ARABIC_PERSIAN_CHARS, lv_label_set_text rewrote Arabic/Persian
+            // into presentation forms (the glyphs actually drawn, and the only ones
+            // present in the subset font). Measuring the logical codepoints
+            // under-counts the ink → an over-large leading → the fa headline pulls
+            // UP into the hero icon (the A11 collision). en is unaffected (AP is a
+            // no-op there, so the stored text == the logical text).
+            int32_t hl_lead = text_top_leading(&BODY_FONT, lv_label_get_text(headline_label));
             lv_obj_set_style_margin_top(headline_label, COMPONENT_PADDING / 2 - hl_lead, LV_PART_MAIN);
         }
     }
@@ -966,10 +977,14 @@ void large_icon_status_screen(void *ctx_json) {
             // loose declared line_height. Matches the PIL reference and tames
             // scripts whose font metrics over-reserve vertical space (Farsi).
             // The gap is intentionally small and profile-scaled.
+            // As with the headline above, measure the label's STORED text so the
+            // Arabic/Persian presentation forms (what's actually drawn) are what we
+            // measure — measuring the logical codepoints under-counts the ink and
+            // pins fa to NotoSansAR's over-reserved declared line_height (too loose).
             int32_t line_gap = LIST_ITEM_PADDING / 2;
             lv_obj_set_style_text_line_space(
                 body_label,
-                tight_line_space(&BODY_FONT, text.c_str(), line_gap),
+                tight_line_space(&BODY_FONT, lv_label_get_text(body_label), line_gap),
                 LV_PART_MAIN);
         }
     }

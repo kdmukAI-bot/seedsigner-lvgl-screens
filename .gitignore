@@ -92,3 +92,6 @@ tools/i18n/spike_out/
 # Production-pack validation output (regenerate: validate_runs.py). Oracle +
 # device PNGs diffed for the release-validation gate.
 tools/i18n/validate_out/
+# Throwaway scratch dir: dev screenshots, montages, zoom crops, fetched refs.
+# (Was the untracked 'review/'; renamed to .tmp/ as a conventional scratch space.)
+.tmp/

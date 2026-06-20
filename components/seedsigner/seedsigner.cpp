@@ -2214,15 +2214,42 @@ void main_menu_screen(void *ctx_json)
 
     // Match the Python LargeButtonScreen button sizing:
     //   button_height = int((canvas_height - top_nav.height - 2*COMPONENT_PADDING - EDGE_PADDING) / 2)
-    int32_t button_w = (available_w - COMPONENT_PADDING) / 2;
     int32_t button_h = (screen_h - TOP_NAV_HEIGHT - 2 * COMPONENT_PADDING - EDGE_PADDING) / 2;
+    int32_t button_w = (available_w - COMPONENT_PADDING) / 2;
+
+    // Cap the button width to the 320x240 profile's button proportions so wider-
+    // than-4:3 displays don't stretch the 2x2 grid buttons too far. Keep the full
+    // button HEIGHT (the grid still fills the screen vertically) but limit the
+    // WIDTH to the reference aspect, then center the grid (below) so the body
+    // pillar-boxes symmetrically. The top_nav spans the full width regardless, so
+    // its power button stays pinned to the far right.
+    //
+    // Reference = the 320x240 buttons (the widest small/4:3 profile), computed from
+    // that profile's geometry. 320x240 renders at PX_MULTIPLIER_100, so these are
+    // the unscaled base constants (EDGE_PADDING=8, COMPONENT_PADDING=8,
+    // top_nav_height=48):
+    //   ref_h = (240 - 48 - 2*8 - 8) / 2          = 84
+    //   ref_w = (320 - 2*8 [body pad] - 8) / 2    = 148
+    // 240x240 (ref_w would be 108) and 320x240 (exactly 148) stay below the cap, so
+    // both are left byte-identical; only 480/800 narrow + pillar-box.
+    constexpr int32_t REF_BTN_W = 148;   // 320x240 button width
+    constexpr int32_t REF_BTN_H = 84;    // 320x240 button height
+    int32_t max_button_w = button_h * REF_BTN_W / REF_BTN_H;
+    if (button_w > max_button_w) {
+        button_w = max_button_w;
+    }
 
     // Vertically center the 2x2 grid, matching the Python LargeButtonScreen:
     //   button_start_y = top_nav_h + (canvas_h - (top_nav_h + CP) - 2*button_h - CP) / 2
     // Computed relative to the body origin (which sits at top_nav bottom).
-    int32_t grid_h = 2 * button_h + COMPONENT_PADDING;
     int32_t below_nav = screen_h - TOP_NAV_HEIGHT;
     int32_t y_offset = (below_nav - COMPONENT_PADDING - 2 * button_h - COMPONENT_PADDING) / 2;
+
+    // Horizontally center the (possibly width-capped) grid within the body so wide
+    // displays pillar-box symmetrically; x_offset is 0 when the grid fills the width.
+    int32_t grid_w = 2 * button_w + COMPONENT_PADDING;
+    int32_t x_offset = (available_w - grid_w) / 2;
+    if (x_offset < 0) x_offset = 0;
 
     lv_obj_t *buttons[4] = {NULL, NULL, NULL, NULL};
     for (uint32_t i = 0; i < 4; ++i) {
@@ -2232,28 +2259,12 @@ void main_menu_screen(void *ctx_json)
     }
 
     // first row
-    lv_obj_set_pos(
-        buttons[0],
-        0,
-        y_offset
-    );
-    lv_obj_set_pos(
-        buttons[1],
-        button_w + COMPONENT_PADDING,
-        y_offset
-    );
+    lv_obj_set_pos(buttons[0], x_offset, y_offset);
+    lv_obj_set_pos(buttons[1], x_offset + button_w + COMPONENT_PADDING, y_offset);
 
     // second row
-    lv_obj_set_pos(
-        buttons[2],
-        0,
-        y_offset + button_h + COMPONENT_PADDING
-    );
-    lv_obj_set_pos(
-        buttons[3],
-        button_w + COMPONENT_PADDING,
-        y_offset + button_h + COMPONENT_PADDING
-    );
+    lv_obj_set_pos(buttons[2], x_offset, y_offset + button_h + COMPONENT_PADDING);
+    lv_obj_set_pos(buttons[3], x_offset + button_w + COMPONENT_PADDING, y_offset + button_h + COMPONENT_PADDING);
 
     // Bind shared nav behavior using this screen's body focusables/layout.
     bind_screen_navigation(

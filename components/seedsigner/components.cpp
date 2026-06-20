@@ -1,6 +1,7 @@
 #include "components.h"
 #include "gui_constants.h"
 #include "input_profile.h"
+#include "font_registry.h"
 #include "seedsigner.h"
 #include "lvgl.h"
 
@@ -362,6 +363,80 @@ static void label_clip_on_defocus(lv_event_t *e) {
 }
 
 
+// Size a button's text label to the button's content box and pick the label's
+// text alignment from whether the (single-line) text fits:
+//   fits      -> centered (visual parity with the Python screens)
+//   too wide  -> START edge (LTR: left, RTL: right) so the BEGINNING of the label
+//                shows instead of LONG_CLIP clipping to its middle.
+//
+// Re-runs on every resize (registered as an LV_EVENT_SIZE_CHANGED handler) so a
+// button whose final width is set AFTER creation gets correct label geometry.
+// The driving case is the main-menu 2x2 grid: large_icon_button() builds a
+// full-body-width label via button(), then main_menu_screen resizes the button
+// to a half-width grid cell — leaving the label stale-wide so overflow was never
+// detected and the centered label clipped to its middle (the Persian "Seeds"
+// symptom). Fixing the width here re-evaluates that automatically.
+//
+// Shaped (glyph-run) locales are NOT measured here: lv_text_get_size over their
+// codepoint text mis-counts the on-screen presentation forms / conjuncts. Their
+// alignment is decided later in glyph_run_draw_cb, which knows the run's true
+// advance and start-justifies an overflowing run there. So we only fix the label
+// WIDTH for them and leave the alignment CENTER.
+static void apply_button_label_layout(lv_obj_t* btn) {
+    lv_obj_t* label = find_last_label_child(btn);
+    if (!label) return;
+
+    // Give the label the button's FULL content box. The button already carries the
+    // theme's horizontal padding (text off the rounded corners), so no extra inset
+    // is needed — and an extra inset only shows up as oversized side margins once a
+    // too-wide label is start-justified (it's invisible while centered). Using the
+    // full width also stops a snug label (e.g. the narrow main-menu grid's
+    // "Settings") from being falsely treated as overflowing and clipped.
+    int32_t available_w = lv_obj_get_content_width(btn);
+    if (available_w < 0) available_w = 0;
+    lv_obj_set_width(label, available_w);
+
+    // Default to centered (parity with the Python screens). Unshaped locales then
+    // measure the text here and flip to the START edge when it overflows; shaped
+    // (glyph-run) locales stay CENTER and let glyph_run_draw_cb start-justify an
+    // overflowing run — lv_text_get_size over their codepoint text mis-counts the
+    // on-screen presentation forms / conjuncts, so the run's true advance (known
+    // only in the draw pass) is the right measure for them.
+    lv_text_align_t align = LV_TEXT_ALIGN_CENTER;
+    if (!seedsigner_locale_uses_glyph_runs()) {
+        // Measure the label's STORED text — with LV_USE_ARABIC_PERSIAN_CHARS,
+        // lv_label_set_text rewrites Arabic/Persian into (narrower) presentation
+        // forms and stores THAT; the subset fonts carry those forms, not the base
+        // codepoints. Measuring the original argument would over-count and falsely
+        // trip overflow (same rationale as top_nav()'s A4 fix). Width is
+        // direction-independent.
+        const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+        lv_point_t text_size = {0, 0};
+        lv_text_get_size(&text_size, lv_label_get_text(label), font, 0, 0,
+                         LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if (text_size.x > available_w) {
+            align = seedsigner_locale_is_rtl() ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT;
+        }
+    }
+    lv_obj_set_style_text_align(label, align, LV_PART_MAIN);
+}
+
+static void button_size_changed_cb(lv_event_t* e) {
+    lv_obj_t* btn = lv_event_get_target_obj(e);
+    // Only the main-menu grid (large_icon_button, a FLEX column) needs its label
+    // re-fixed on resize: button() builds the label at the full body width, then
+    // main_menu_screen shrinks the button to an exact half-width cell. Plain
+    // buttons are left exactly as created — screens that resize them (e.g. the
+    // status screen, which insets its buttons to body_w - 2*EDGE_PADDING) already
+    // size to their final width, and re-fixing here would double-inset and wrongly
+    // clip the label. The grid is sized to an EXACT width (no inset), so re-fixing
+    // it converges on the right geometry.
+    if (lv_obj_get_style_layout(btn, LV_PART_MAIN) == LV_LAYOUT_FLEX) {
+        apply_button_label_layout(btn);
+    }
+}
+
+
 lv_obj_t* button(lv_obj_t* lv_parent, const char* text, lv_obj_t* align_to) {
     lv_obj_t* lv_button = lv_button_create(lv_parent);
     lv_obj_set_size(lv_button, lv_obj_get_content_width(lv_parent), BUTTON_HEIGHT);
@@ -376,19 +451,34 @@ lv_obj_t* button(lv_obj_t* lv_parent, const char* text, lv_obj_t* align_to) {
 
     reset_button_chrome(lv_button);
 
+    // Use COMPONENT_PADDING for the label's side margin instead of the LVGL theme's
+    // default button pad_hor (PAD_DEF, ~13px at 240 — wider than our 8px rhythm).
+    // Invisible while a label is centered (the content box stays symmetric, so
+    // centered text is byte-identical), this gives a start-justified too-wide label
+    // a consistent COMPONENT_PADDING gutter on both the plain and grid buttons.
+    lv_obj_set_style_pad_hor(lv_button, COMPONENT_PADDING, LV_PART_MAIN);
+
     lv_obj_t* label = lv_label_create(lv_button);
     lv_obj_set_style_text_font(label, &BUTTON_FONT, LV_PART_MAIN);
-    lv_obj_set_width(label, lv_obj_get_content_width(lv_button) - 2 * EDGE_PADDING);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    if (input_profile_get_mode() == INPUT_MODE_TOUCH) {
-        lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    } else {
-        lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+
+    // Labels are STATIC (LONG_CLIP) at rest — a too-wide label start-justifies and
+    // clips its tail rather than marquee-scrolling. On hardware, a focused too-wide
+    // label scrolls (marquee) and re-clips on defocus, so the start is shown again.
+    // (Touch has no focus, so its labels never scroll.)
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+    if (input_profile_get_mode() != INPUT_MODE_TOUCH) {
         lv_obj_add_event_cb(lv_button, label_scroll_on_focus, LV_EVENT_FOCUSED, NULL);
         lv_obj_add_event_cb(lv_button, label_clip_on_defocus, LV_EVENT_DEFOCUSED, NULL);
     }
+
     lv_label_set_text(label, text);
     lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
+
+    // Size the label to the button's content box and choose its text alignment
+    // (centered if it fits, start-justified if too wide). Re-run on every resize so
+    // buttons resized after creation (the main-menu grid) fix their label geometry.
+    apply_button_label_layout(lv_button);
+    lv_obj_add_event_cb(lv_button, button_size_changed_cb, LV_EVENT_SIZE_CHANGED, NULL);
 
     // Wire up gesture-aware input callback
     lv_obj_add_event_cb(lv_button, button_toggle_callback, LV_EVENT_PRESSED, NULL);

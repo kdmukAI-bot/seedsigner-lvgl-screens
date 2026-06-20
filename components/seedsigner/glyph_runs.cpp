@@ -754,6 +754,20 @@ void glyph_run_draw_cb(lv_event_t* e) {
     const int content_w = lv_area_get_width(&cc);
 
     lv_text_align_t align = lv_obj_get_style_text_align(label, LV_PART_MAIN);
+
+    // A centered single-line label whose run overflows (e.g. a too-wide button
+    // label) must show its START edge, not center-clip to its middle — the shaped
+    // counterpart of apply_button_label_layout()'s subset-path start-justify. The
+    // start edge is left for LTR, right for RTL. Scope this to CLIP labels (button
+    // labels + the top-nav title); WRAP body text is excluded so an unwrapped RTL
+    // body line (ur wrapping is deferred) keeps its existing centered rendering and
+    // this stays an A2 button-label change. Labels that fit are unchanged; an
+    // explicit LEFT/RIGHT align is always honored as-is.
+    if (align == LV_TEXT_ALIGN_CENTER && run->layout_w > content_w &&
+        lv_label_get_long_mode(label) == LV_LABEL_LONG_CLIP) {
+        align = g_table.rtl ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT;
+    }
+
     int text_x;
     switch (align) {
         case LV_TEXT_ALIGN_CENTER: text_x = cc.x1 + (content_w - run->layout_w) / 2; break;

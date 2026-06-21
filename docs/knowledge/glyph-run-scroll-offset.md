@@ -96,11 +96,15 @@ Byte-identical proof for the static gallery: render before/after for en/de/fa/hi
 and `diff -rq` the `img/` trees. Expect en/de/fa/hi/ur identical and th changed only by
 a ~2px content-box clip of one title glyph's right overshoot (visually identical).
 
-## Still deferred after Task 0 (consumers)
+## Consumers (built on Task 0)
 Task 0 is the *capability*. The consumers are separate:
-- Long status **headlines** (currently `LONG_DOT`) and **top-nav titles** auto-scroll —
-  plan Items 2b / 2c.
-- Touch long-press-to-scroll — Item 3.
-- A shaped **button** marquee — `button_set_label_marquee` still early-returns for
-  glyph-run locales (see `hardware-focus-label-marquee.md` §5). Flipping that on is a
-  future item; Task 0 only removes the draw-layer blocker for LTR.
+- **Top-nav titles** (Item 2c/2d) and long status **headlines** (Item 2b) auto-scroll —
+  DONE; both ride this offset via `label_set_line_autoscroll()`
+  (`label-autoscroll-feel.md`).
+- **Touch long-press-to-scroll** (Item 3) — DONE; LTR shaped (hi/th) button labels scroll
+  on a long-press hold via this offset path (`touch-long-press-scroll.md`).
+- A shaped **hardware-focus** button marquee — STILL deferred: `button_set_label_marquee`
+  early-returns for glyph-run locales (see `hardware-focus-label-marquee.md` §5). Touch
+  (Item 3) covers the gesture for shaped LTR via a separate path; flipping on the hardware
+  marquee is a future item.
+- RTL (ur) marquee/start-justify — still deferred at this draw layer (see trap 1).

@@ -92,6 +92,15 @@ animating the mask draw itself — out of scope for v1.
 > still early-returns for glyph-run locales. Enabling a shaped LTR button marquee is
 > now a small consumer change (drop the early-return for `!rtl` and verify), tracked
 > alongside hardening-plan Items 2b/2c/3. RTL (ur) remains excluded at the draw layer.
+>
+> **Update (Item 3, 2026-06-21):** the TOUCH counterpart now exists — long-press-hold a
+> button to scroll its label without selecting (`touch-long-press-scroll.md`). It is a
+> SEPARATE path that calls `label_set_line_autoscroll()` directly (not
+> `button_set_label_marquee`), so it already scrolls **LTR shaped (hi/th)** labels via
+> Task 0's offset-aware draw. This `button_set_label_marquee` **hardware** path is
+> unchanged and still early-returns for glyph-run locales — enabling the shaped hardware
+> marquee remains the open item (A14 follow-up). Touch and hardware are mutually
+> exclusive per screen, so the two paths never run together.
 
 ## Where this lives
 

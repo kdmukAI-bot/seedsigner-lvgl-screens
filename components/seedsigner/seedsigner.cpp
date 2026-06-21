@@ -482,6 +482,22 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
 }
 
 
+// Create a standard wrapped body-text label in `parent`: WRAP, fixed `width`,
+// centered, BODY_FONT in BODY_FONT_COLOR. Shared by the button_list_screen intro
+// text and the status-screen body (which then layers on its inset width, tight
+// line spacing, and centering). Caller owns any further styling.
+static lv_obj_t *make_body_text_label(lv_obj_t *parent, const char *text, int32_t width) {
+    lv_obj_t *label = lv_label_create(parent);
+    lv_label_set_text(label, text);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(label, width);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_hex(BODY_FONT_COLOR), LV_PART_MAIN);
+    lv_obj_set_style_text_font(label, &BODY_FONT, LV_PART_MAIN);
+    return label;
+}
+
+
 // Render a screen whose body is a vertical list of buttons, optionally preceded
 // by an intro-text block (`cfg["text"]`).
 //
@@ -510,13 +526,8 @@ void button_list_screen(void *ctx_json)
     if (cfg.contains("text") && cfg["text"].is_string()) {
         std::string text = cfg["text"].get<std::string>();
         if (!text.empty() && screen.upper_body && screen.upper_body != screen.body) {
-            lv_obj_t *intro = lv_label_create(screen.upper_body);
-            lv_label_set_text(intro, text.c_str());
-            lv_label_set_long_mode(intro, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(intro, lv_obj_get_content_width(screen.upper_body));
-            lv_obj_set_style_text_align(intro, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-            lv_obj_set_style_text_color(intro, lv_color_hex(BODY_FONT_COLOR), LV_PART_MAIN);
-            lv_obj_set_style_text_font(intro, &BODY_FONT, LV_PART_MAIN);
+            make_body_text_label(screen.upper_body, text.c_str(),
+                                 lv_obj_get_content_width(screen.upper_body));
         }
     }
 
@@ -685,25 +696,13 @@ static void add_warning_edges_overlay(lv_obj_t *screen, int status_color) {
 // ---------------------------------------------------------------------------
 // Tight, ink-based inter-line spacing.
 //
-// LVGL's declared font line_height carries loose leading and varies wildly
-// across scripts (Arabic/Farsi fonts reserve large vertical space for stacked
-// marks), so using it as the line advance leaves multi-line body text far
-// looser than the PIL/Python reference. Instead we derive the advance from the
-// ACTUAL ink extents of the glyphs present in `text` -- the tallest ascender
-// plus the deepest descender -- and add only a small visual `gap`. The result
-// is the value to hand lv_obj_set_style_text_line_space() (the rendered advance
-// is font line_height + this), so it is usually NEGATIVE (tightening).
-//
-// Worst-case safe for a run of text: the maximum ascender (which may land on a
-// lower line) and the maximum descender (which may land on the line above it)
-// are kept at least `gap` px apart. Complex cursive scripts with a cascading
-// baseline (Urdu Nastaliq) are not well served by a single constant advance and
-// render through their own (shaped) path, not this one.
-static int32_t tight_line_space(const lv_font_t *font, const char *text, int32_t gap) {
-    if (!font || !text) {
-        return 0;
-    }
-
+// Walk `text` (UTF-8) and return the maximum ink ascent and descent — the tallest
+// distance above and the deepest below the baseline — over every visible glyph in
+// `font`. Whitespace and absent/inkless glyphs are skipped. Both tight_line_space
+// and text_top_leading derive their metrics from this single pass (text_top_leading
+// uses only the ascent). Either out-param may be null.
+static void measure_text_ink_extents(const lv_font_t *font, const char *text,
+                                     int32_t *out_max_ascent, int32_t *out_max_descent) {
     int32_t max_ascent  = 0;   // ink above the baseline
     int32_t max_descent = 0;   // ink below the baseline
 
@@ -736,6 +735,32 @@ static int32_t tight_line_space(const lv_font_t *font, const char *text, int32_t
         if (ascent  > max_ascent)  max_ascent  = ascent;
         if (descent > max_descent) max_descent = descent;
     }
+
+    if (out_max_ascent)  *out_max_ascent  = max_ascent;
+    if (out_max_descent) *out_max_descent = max_descent;
+}
+
+// LVGL's declared font line_height carries loose leading and varies wildly
+// across scripts (Arabic/Farsi fonts reserve large vertical space for stacked
+// marks), so using it as the line advance leaves multi-line body text far
+// looser than the PIL/Python reference. Instead we derive the advance from the
+// ACTUAL ink extents of the glyphs present in `text` -- the tallest ascender
+// plus the deepest descender -- and add only a small visual `gap`. The result
+// is the value to hand lv_obj_set_style_text_line_space() (the rendered advance
+// is font line_height + this), so it is usually NEGATIVE (tightening).
+//
+// Worst-case safe for a run of text: the maximum ascender (which may land on a
+// lower line) and the maximum descender (which may land on the line above it)
+// are kept at least `gap` px apart. Complex cursive scripts with a cascading
+// baseline (Urdu Nastaliq) are not well served by a single constant advance and
+// render through their own (shaped) path, not this one.
+static int32_t tight_line_space(const lv_font_t *font, const char *text, int32_t gap) {
+    if (!font || !text) {
+        return 0;
+    }
+
+    int32_t max_ascent = 0, max_descent = 0;
+    measure_text_ink_extents(font, text, &max_ascent, &max_descent);
 
     if (max_ascent + max_descent <= 0) {
         return 0;   // measured nothing; leave the label's default spacing alone
@@ -773,29 +798,7 @@ int32_t text_top_leading(const lv_font_t *font, const char *text) {
         return 0;
     }
     int32_t max_ascent = 0;
-    for (const unsigned char *p = (const unsigned char *)text; *p; ) {
-        uint32_t cp;
-        if (*p < 0x80) {
-            cp = *p; p += 1;
-        } else if ((*p >> 5) == 0x6 && p[1]) {
-            cp = ((uint32_t)(p[0] & 0x1F) << 6) | (p[1] & 0x3F); p += 2;
-        } else if ((*p >> 4) == 0xE && p[1] && p[2]) {
-            cp = ((uint32_t)(p[0] & 0x0F) << 12) | ((uint32_t)(p[1] & 0x3F) << 6) | (p[2] & 0x3F); p += 3;
-        } else if ((*p >> 3) == 0x1E && p[1] && p[2] && p[3]) {
-            cp = ((uint32_t)(p[0] & 0x07) << 18) | ((uint32_t)(p[1] & 0x3F) << 12) | ((uint32_t)(p[2] & 0x3F) << 6) | (p[3] & 0x3F); p += 4;
-        } else {
-            p += 1; continue;
-        }
-        if (cp == '\n' || cp == '\r' || cp == ' ') {
-            continue;
-        }
-        lv_font_glyph_dsc_t d;
-        if (!lv_font_get_glyph_dsc(font, &d, cp, 0) || d.box_h == 0) {
-            continue;
-        }
-        int32_t a = (int32_t)d.ofs_y + (int32_t)d.box_h;
-        if (a > max_ascent) max_ascent = a;
-    }
+    measure_text_ink_extents(font, text, &max_ascent, nullptr);
     if (max_ascent <= 0) {
         return 0;
     }
@@ -948,10 +951,6 @@ void large_icon_status_screen(void *ctx_json) {
     if (cfg.contains("text") && cfg["text"].is_string()) {
         std::string text = cfg["text"].get<std::string>();
         if (!text.empty()) {
-            body_label = lv_label_create(screen.upper_body);
-            lv_label_set_text(body_label, text.c_str());
-            lv_label_set_long_mode(body_label, LV_LABEL_LONG_WRAP);
-
             // Inset the body text by `text_edge_padding` on each side so it
             // never sits under the pulsing warning border (warning variants
             // double the inset; success uses a single EDGE_PADDING).
@@ -960,11 +959,9 @@ void large_icon_status_screen(void *ctx_json) {
             if (text_width < 16) {
                 text_width = 16;
             }
-            lv_obj_set_width(body_label, text_width);
 
-            lv_obj_set_style_text_align(body_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-            lv_obj_set_style_text_color(body_label, lv_color_hex(BODY_FONT_COLOR), LV_PART_MAIN);
-            lv_obj_set_style_text_font(body_label, &BODY_FONT, LV_PART_MAIN);
+            body_label = make_body_text_label(screen.upper_body, text.c_str(), text_width);
+
             // Python places the body immediately after the headline
             // (body_top = headline_bottom; no extra gap) — so NO top margin here.
             // A CP/2 margin (as before) made the headline->body gap visibly looser
@@ -1000,6 +997,38 @@ void large_icon_status_screen(void *ctx_json) {
     }
     if (warning_edges) {
         add_warning_edges_overlay(screen.screen, defaults.color);
+    }
+
+    // A13/Item1: for shaped (glyph-run) locales the body's mask is drawn TALLER than
+    // the lv_label widget box — the run lays out at the font's full line_height,
+    // while the codepoint box is sized at the tighter tight_line_space advance. Bake
+    // the runs NOW (normally deferred to the post-load pass) and GROW the body label
+    // to the run's true drawn height, so the codepoint box no longer under-reports
+    // the painted extent. Every lv_obj_get_scroll_bottom() decision below — reclaim,
+    // the fits gate, the centering, and bind_screen_navigation's scroll auto-detect —
+    // then measures the real height on ONE code path, so a tall shaped body
+    // reclaims/scrolls instead of clipping at the bottom with no scroll path. Mirror
+    // the post-load order (RTL flip, then attach); the post-load pass re-runs both as
+    // no-ops (RTL idempotent; attach skips already-attached labels). No-op for
+    // en/subset (apply_glyph_runs_to_labels self-gates on the active locale; run
+    // height returns -1 so no min-height is set).
+    if (seedsigner_locale_uses_glyph_runs()) {
+        lv_obj_update_layout(screen.body);
+        if (seedsigner_locale_is_rtl()) {
+            apply_rtl_text_to_labels(screen.screen);
+        }
+        apply_glyph_runs_to_labels(screen.screen);
+        if (body_label) {
+            // run height is content-relative (painted from the content top), so size
+            // the box to run_h PLUS the label's vertical padding to keep the content
+            // area >= the painted run regardless of any theme padding.
+            int32_t run_h = seedsigner_label_run_drawn_height(body_label);
+            if (run_h >= 0) {
+                int32_t pad_v = lv_obj_get_style_pad_top(body_label, LV_PART_MAIN) +
+                                lv_obj_get_style_pad_bottom(body_label, LV_PART_MAIN);
+                lv_obj_set_style_min_height(body_label, run_h + pad_v, LV_PART_MAIN);
+            }
+        }
     }
 
     // Reclaim-only-as-needed: if the content overflows by no more than the top_nav's
@@ -1039,25 +1068,6 @@ void large_icon_status_screen(void *ctx_json) {
     bool body_fits = lv_obj_get_scroll_bottom(screen.body) == 0;
     if (body_fits && body_label && !seedsigner_locale_uses_glyph_runs()) {
         balance_wrapped_label_column(body_label);
-    }
-
-    // A13: for shaped (glyph-run) locales the body's mask is drawn TALLER than the
-    // lv_label widget box — the run lays out at the font's full line_height, while
-    // the widget box is sized from the codepoint text at the tighter
-    // tight_line_space advance. The vertical centering below measures the widget
-    // box, so without the run's true height it would center hi/th/ur on a too-short
-    // body and bias the text low (worst at 240x240). Bake the runs NOW — normally
-    // deferred to the post-load pass — so the centering can read each shaped body's
-    // drawn height via seedsigner_label_run_drawn_height(). Mirror the post-load
-    // order (RTL flip, then attach); the post-load pass re-runs both as no-ops (RTL
-    // is idempotent; attach skips already-attached labels). No-op for en/subset
-    // locales (apply_glyph_runs_to_labels self-gates on the active locale).
-    if (seedsigner_locale_uses_glyph_runs()) {
-        lv_obj_update_layout(screen.body);
-        if (seedsigner_locale_is_rtl()) {
-            apply_rtl_text_to_labels(screen.screen);
-        }
-        apply_glyph_runs_to_labels(screen.screen);
     }
 
     // Vertically center the body text in the gap between the headline and the

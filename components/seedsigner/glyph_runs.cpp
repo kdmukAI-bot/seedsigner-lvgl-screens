@@ -758,10 +758,14 @@ void glyph_run_draw_cb(lv_event_t* e) {
     // A centered single-line label whose run overflows (e.g. a too-wide button
     // label) must show its START edge, not center-clip to its middle — the shaped
     // counterpart of apply_button_label_layout()'s subset-path start-justify. The
-    // start edge is left for LTR, right for RTL. Scope this to CLIP labels (button
-    // labels + the top-nav title); WRAP body text is excluded so an unwrapped RTL
-    // body line (ur wrapping is deferred) keeps its existing centered rendering and
-    // this stays an A2 button-label change. Labels that fit are unchanged; an
+    // start edge is left for LTR, right for RTL. Scoped to LONG_CLIP labels — i.e.
+    // button labels (A2). NOT the top-nav title (LONG_SCROLL_CIRCULAR) or the status
+    // headline (LONG_DOT): those single-line CENTER labels are out of scope here and
+    // would still center-clip an overflowing shaped run; making them start-justify +
+    // auto-scroll is tracked separately (see .claude/plans/pre-upstream-pr-hardening.md
+    // Items 2b/2c, gated on the glyph-run mask honoring the label scroll offset).
+    // WRAP body text is also excluded so an unwrapped RTL body line (ur wrapping is
+    // deferred) keeps its centered rendering. Labels that fit are unchanged; an
     // explicit LEFT/RIGHT align is always honored as-is.
     if (align == LV_TEXT_ALIGN_CENTER && run->layout_w > content_w &&
         lv_label_get_long_mode(label) == LV_LABEL_LONG_CLIP) {

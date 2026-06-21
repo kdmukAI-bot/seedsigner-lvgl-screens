@@ -103,6 +103,68 @@ static lv_obj_t* top_nav_icon_button(lv_obj_t* lv_parent, const char* icon, lv_a
     return btn;
 }
 
+// Configure an already start-justified, width-constrained single-line label to
+// auto-scroll its overflowing text: hold start-justified for an initial beat (so the
+// reader absorbs the screen + the start of the line), then continuously marquee-scroll
+// (circular wrap) at a steady ~LINE_SCROLL_PX_PER_SEC, holding again each time the
+// line wraps back to the start. Used by the top-nav title and (later) the long status
+// headline. The circular wrap reads better than Python's back-and-forth ping-pong;
+// the per-loop start hold is the part of Python's feel worth keeping.
+//
+// Speed: we set an EXPLICIT per-line duration (style anim_duration in ms) rather than
+// LVGL's px/sec speed encoding — the encoding caps the resolved duration at ~10 s, so
+// a long line (e.g. the 60-char German stress title) would otherwise run noticeably
+// faster than the target. CIRCULAR scrolls the whole line plus a WAIT_CHAR gap before
+// it wraps, so duration = (text_width + gap) / px_per_sec gives a true constant rate.
+// The holds come from a static template anim: the label's circular scroll setup
+// (lv_label.c overwrite_anim_property, SCROLL_CIRCULAR) copies our act_time /
+// repeat_cnt / repeat_delay out of it —
+//   - act_time = -BEGIN_HOLD    -> the FIRST hold (negative act_time == start delay),
+//   - repeat_delay = BEGIN_HOLD -> the hold each time the loop wraps to the start,
+//   - repeat_cnt = INFINITE     -> keep looping (lv_anim_init defaults this to 1!).
+// (CIRCULAR has no reverse phase, so reverse_delay is not copied / not set.) The
+// template is a function-local static: the label copies the fields out and never
+// retains a pointer to it, and every line wants the identical feel, so one shared
+// instance is safe for the program's lifetime.
+void label_set_line_autoscroll(lv_obj_t* label) {
+    if (!label) {
+        return;
+    }
+    lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR);  // continuous wrap
+
+    // ~40 px/sec at the Pi Zero reference (PX_MULTIPLIER=100), scaled for taller
+    // displays so the visual speed (text-widths per second) stays constant.
+    uint32_t px_per_sec = (uint32_t)LINE_SCROLL_PX_PER_SEC * active_profile().px_multiplier / 100;
+    if (px_per_sec < 1) {
+        px_per_sec = 1;
+    }
+
+    // Measure the line LVGL will scroll: the stored (presentation-form) text at the
+    // label's font + letter spacing, plus the WAIT_CHAR space gap CIRCULAR adds before
+    // the wrap — i.e. the same distance the offset animation travels. Set the duration
+    // so that distance is covered at px_per_sec (floored so a tiny overflow can't
+    // produce a jittery sub-300 ms scroll).
+    const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    lv_point_t line_size = {0, 0};
+    lv_text_get_size(&line_size, lv_label_get_text(label), font,
+                     lv_obj_get_style_text_letter_space(label, LV_PART_MAIN), 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int32_t scroll_distance = line_size.x +
+        lv_font_get_glyph_width(font, ' ', ' ') * LV_LABEL_WAIT_CHAR_COUNT;
+    uint32_t duration_ms = (uint32_t)((int64_t)scroll_distance * 1000 / px_per_sec);
+    if (duration_ms < (uint32_t)LINE_SCROLL_MIN_MS) {
+        duration_ms = (uint32_t)LINE_SCROLL_MIN_MS;
+    }
+    lv_obj_set_style_anim_duration(label, duration_ms, LV_PART_MAIN);
+
+    static lv_anim_t scroll_feel_template;
+    lv_anim_init(&scroll_feel_template);
+    lv_anim_set_delay(&scroll_feel_template, LINE_SCROLL_BEGIN_HOLD_MS);   // act_time = -begin hold
+    scroll_feel_template.repeat_cnt   = LV_ANIM_REPEAT_INFINITE;           // keep the infinite loop
+    scroll_feel_template.repeat_delay = LINE_SCROLL_BEGIN_HOLD_MS;         // hold on each wrap to start
+    lv_obj_set_style_anim(label, &scroll_feel_template, LV_PART_MAIN);
+}
+
 lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button, bool show_power_button, lv_obj_t **out_back_btn, lv_obj_t **out_power_btn, const lv_font_t *title_font) {
 
     lv_parent = lv_parent ? lv_parent : lv_scr_act();
@@ -180,10 +242,16 @@ lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button,
     lv_text_get_size(&text_size, lv_label_get_text(label), eff_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
 
     if (text_size.x > label_w) {
-        // Overflow case: clip + scroll within the region between the buttons.
+        // Overflow case: clip + scroll within the region between the buttons. The
+        // title starts start-justified (left here; shaped RTL via the glyph-run draw)
+        // then continuously marquee-scrolls with an initial hold + a hold each time it
+        // wraps back to the start, at ~40 px/sec (label_set_line_autoscroll; it tunes
+        // the bare LONG_SCROLL_CIRCULAR set above). Shaped (hi/th) titles ride the same
+        // offset animation now that the glyph-run draw honors label->offset.x (Task 0).
         lv_obj_set_width(label, label_w);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
         lv_obj_align(label, LV_ALIGN_LEFT_MID, left_pad, 0);
+        label_set_line_autoscroll(label);
     } else {
         // Title fits. Prefer centering on the full nav width (visually centered
         // on screen). But if that would push the text under a side button — the

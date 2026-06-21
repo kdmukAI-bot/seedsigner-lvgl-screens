@@ -51,6 +51,21 @@ const int PX_MULTIPLIER_100 = 100;   // 240px height (Pi Zero): no scaling
 const int PX_MULTIPLIER_133 = 133;   // 320px height (3.5" ESP32): direct 320/240 ratio
 const int PX_MULTIPLIER_200 = 200;   // 480px height (4.3" ESP32): direct 480/240 ratio (2x)
 
+// Auto-scroll feel for an overflowing single-line label (top-nav title; long
+// status headline). Hold the line start-justified for an initial beat so the reader
+// can absorb the start, then continuously marquee-scroll (circular wrap) at a TRUE
+// constant px/sec (the helper sets an explicit per-line duration = distance / speed,
+// not LVGL's speed encoding which caps the duration ~10 s and lets long lines run
+// fast), holding again each time it wraps back to the start. The speed matches the
+// Python (PIL) screens' horizontal_scroll_speed of 40 px/sec (smooth on a Pi Zero);
+// the circular wrap is preferred over Python's back-and-forth ping-pong, and the
+// per-loop start hold is the part of Python's feel worth keeping. Speed is px/sec at
+// the Pi Zero reference (PX_MULTIPLIER=100) and scaled for taller displays so the
+// visual speed is constant; the hold is wall-clock and does not scale.
+const int LINE_SCROLL_PX_PER_SEC    = 40;    // matches Python horizontal_scroll_speed
+const int LINE_SCROLL_BEGIN_HOLD_MS = 1000;  // initial hold + hold on each wrap to start (1 s)
+const int LINE_SCROLL_MIN_MS        = 300;   // floor on the resolved scroll duration (tiny overflows)
+
 // ---------------------------------------------------------------------------
 // Font declarations for supported display heights
 // ---------------------------------------------------------------------------

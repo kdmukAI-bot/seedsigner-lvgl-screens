@@ -797,12 +797,28 @@ void glyph_run_delete_cb(lv_event_t* e) {
     free_label_run((LabelRun*)lv_event_get_user_data(e));
 }
 
+// Return the LabelRun attached to `obj` (the user_data of its glyph_run_draw_cb
+// event), or nullptr if none. Used both to skip double-attach when a screen baked
+// its runs early, and to expose the run's drawn height to the layout.
+LabelRun* find_label_run(lv_obj_t* obj) {
+    uint32_t n = lv_obj_get_event_count(obj);
+    for (uint32_t i = 0; i < n; ++i) {
+        lv_event_dsc_t* d = lv_obj_get_event_dsc(obj, i);
+        if (d && lv_event_dsc_get_cb(d) == glyph_run_draw_cb) {
+            return (LabelRun*)lv_event_dsc_get_user_data(d);
+        }
+    }
+    return nullptr;
+}
+
 // --- Recursively attach runs to matching labels. ----------------------------
 void attach_runs(lv_obj_t* obj) {
     // User text-entry stays on the codepoint path (ASCII; never shaped).
     if (lv_obj_check_type(obj, &lv_textarea_class)) return;
 
-    if (lv_obj_check_type(obj, &lv_label_class)) {
+    // Already baked (a screen front-loaded its runs so it could measure them) —
+    // don't double-attach; just recurse to children below.
+    if (lv_obj_check_type(obj, &lv_label_class) && !find_label_run(obj)) {
         // Only labels drawn with a registered shaping-locale script font are
         // candidates — this cleanly skips icon / keyboard / pure-ASCII labels.
         const lv_font_t* font = lv_obj_get_style_text_font(obj, LV_PART_MAIN);
@@ -945,4 +961,13 @@ void seedsigner_clear_glyph_runs() {
 void apply_glyph_runs_to_labels(struct _lv_obj_t* screen) {
     if (!g_have_table || !seedsigner_locale_uses_glyph_runs() || !screen) return;
     attach_runs((lv_obj_t*)screen);
+}
+
+int32_t seedsigner_label_run_drawn_height(struct _lv_obj_t* label) {
+    if (!label) return -1;
+    LabelRun* run = find_label_run((lv_obj_t*)label);
+    if (!run || !run->mask) return -1;
+    // mask height == nlines*line_height + 2*margin (see bake_run); the block the
+    // run actually paints, from the label's content top, is nlines*line_height.
+    return (int32_t)run->mask->header.h - 2 * run->margin;
 }

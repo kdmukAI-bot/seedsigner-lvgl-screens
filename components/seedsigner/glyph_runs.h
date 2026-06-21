@@ -29,6 +29,7 @@
 // considered (see font_registry.h), so Latin/icon/ASCII labels are untouched.
 
 #include <cstddef>
+#include <cstdint>
 
 struct _lv_obj_t;
 
@@ -48,7 +49,20 @@ void seedsigner_clear_glyph_runs();
 // pre-shaped glyph runs. No-op unless the active locale uses shaping
 // (seedsigner_locale_uses_glyph_runs) and a run table is loaded. Hooked into the
 // single global screen-load post-pass (load_screen_and_cleanup_previous),
-// sibling to apply_rtl_text_to_labels().
+// sibling to apply_rtl_text_to_labels(). Idempotent: a label that already carries
+// a run is skipped, so a screen may call it early (to measure a baked run) and the
+// global post-pass then re-runs it harmlessly.
 void apply_glyph_runs_to_labels(struct _lv_obj_t* screen);
+
+// Drawn vertical extent (px) of the glyph run attached to `label`, measured from
+// the label's content-box top: nlines * line_height (== the baked mask height minus
+// its top+bottom bearing margins) — the height the run actually paints. This is
+// TALLER than the label widget's own box, which LVGL sizes from the codepoint text
+// at the tighter tight_line_space advance, NOT the run's full line_height. A layout
+// that vertically centers a shaped body must use this value rather than
+// lv_obj_get_coords(label).bottom. Returns -1 when the label has no attached run (a
+// plain codepoint label, or a non-shaping locale), so callers fall back cleanly to
+// the label box. The run must already be attached (apply_glyph_runs_to_labels).
+int32_t seedsigner_label_run_drawn_height(struct _lv_obj_t* label);
 
 #endif // GLYPH_RUNS_H

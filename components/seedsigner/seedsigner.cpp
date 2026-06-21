@@ -1041,6 +1041,25 @@ void large_icon_status_screen(void *ctx_json) {
         balance_wrapped_label_column(body_label);
     }
 
+    // A13: for shaped (glyph-run) locales the body's mask is drawn TALLER than the
+    // lv_label widget box — the run lays out at the font's full line_height, while
+    // the widget box is sized from the codepoint text at the tighter
+    // tight_line_space advance. The vertical centering below measures the widget
+    // box, so without the run's true height it would center hi/th/ur on a too-short
+    // body and bias the text low (worst at 240x240). Bake the runs NOW — normally
+    // deferred to the post-load pass — so the centering can read each shaped body's
+    // drawn height via seedsigner_label_run_drawn_height(). Mirror the post-load
+    // order (RTL flip, then attach); the post-load pass re-runs both as no-ops (RTL
+    // is idempotent; attach skips already-attached labels). No-op for en/subset
+    // locales (apply_glyph_runs_to_labels self-gates on the active locale).
+    if (seedsigner_locale_uses_glyph_runs()) {
+        lv_obj_update_layout(screen.body);
+        if (seedsigner_locale_is_rtl()) {
+            apply_rtl_text_to_labels(screen.screen);
+        }
+        apply_glyph_runs_to_labels(screen.screen);
+    }
+
     // Vertically center the body text in the gap between the headline and the
     // bottom button when the content FITS with slack to spare. By default the body
     // text sits directly under the headline (gap 0) and the whole flex-grow spacer
@@ -1055,10 +1074,33 @@ void large_icon_status_screen(void *ctx_json) {
         lv_area_t text_area, button_area;
         lv_obj_get_coords(body_label, &text_area);
         lv_obj_get_coords(screen.button_list[0], &button_area);
-        int32_t below_gap = button_area.y1 - text_area.y2;   // text bottom -> button top
+
+        // text bottom -> button top. For a shaped (glyph-run) body the run paints
+        // a different height than the codepoint label box, so use the run's true
+        // drawn bottom (content top + drawn block height); -1 => no run (en/subset
+        // locales), in which case the label box bottom is already correct. (A13)
+        int32_t text_bottom = text_area.y2;
+        int32_t run_h = seedsigner_label_run_drawn_height(body_label);
+        if (run_h >= 0) {
+            lv_area_t cc;
+            lv_obj_get_content_coords(body_label, &cc);
+            text_bottom = cc.y1 + run_h;
+        }
+        int32_t below_gap = button_area.y1 - text_bottom;
         int32_t spacer_height = lv_obj_get_height(screen.button_list_spacer);
+
+        // Shift the body down by half the below-gap to balance the space above and
+        // below it. The shift comes out of the flex-grow spacer, so the button stays
+        // pinned — but we can never take more than the spacer holds, or the button
+        // would move. On TIGHT screens (e.g. a 3-line shaped body at 240x240) the
+        // ideal half-gap exceeds the small spacer; CLAMP to the spacer for a partial
+        // centering rather than skipping it entirely (which left the body hugging the
+        // headline — the reported hi/th symptom). (A13)
         int32_t shift = below_gap / 2;
-        if (shift > 0 && shift <= spacer_height) {
+        if (shift > spacer_height) {
+            shift = spacer_height;
+        }
+        if (shift > 0) {
             lv_obj_set_style_margin_top(body_label, shift, LV_PART_MAIN);
         }
     }

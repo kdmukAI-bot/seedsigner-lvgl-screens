@@ -914,18 +914,61 @@ void large_icon_status_screen(void *ctx_json) {
     // upper_body now spans the full screen width (body padding zeroed above).
     const int32_t upper_body_content_width = lv_obj_get_width(screen.screen);
 
-    // Optional headline — colored to match status; truncate (don't wrap) so
-    // designers know to keep it short, matching Python's auto_line_break=False.
+    // Horizontal inset for the readable text column: the body text, and an
+    // overflowing headline when it scrolls, both sit inside this gutter so they
+    // share one left/right edge and clear the pulsing warning border (warning
+    // variants double it; success uses a single EDGE_PADDING). The hero icon and
+    // a centered (fitting) headline still span the full width, matching Python.
+    const int32_t text_inset = defaults.text_edge_padding_multiplier * EDGE_PADDING;
+
+    // Optional headline — colored to match status. Single-line (never wraps),
+    // matching Python's auto_line_break=False. A headline that FITS centers on the
+    // full width and is byte-identical to before (LONG_DOT). A headline that
+    // OVERFLOWS start-justifies (LTR=left; shaped RTL via the glyph-run draw) and
+    // auto-scrolls within the text column to reveal the tail — a NEW capability
+    // (Python truncates with an ellipsis; we scroll instead). Overflow is rare
+    // (the fit test is against the full width) but long localized strings hit it.
     if (cfg.contains("status_headline") && cfg["status_headline"].is_string()) {
         std::string headline = cfg["status_headline"].get<std::string>();
         if (!headline.empty()) {
             lv_obj_t *headline_label = lv_label_create(screen.upper_body);
             lv_label_set_text(headline_label, headline.c_str());
-            lv_label_set_long_mode(headline_label, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(headline_label, upper_body_content_width);
-            lv_obj_set_style_text_align(headline_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
             lv_obj_set_style_text_color(headline_label, lv_color_hex(defaults.color), LV_PART_MAIN);
             lv_obj_set_style_text_font(headline_label, &BODY_FONT, LV_PART_MAIN);
+
+            // Measure the rendered width like top_nav()/A11 do: the label's STORED
+            // text (Arabic/Persian presentation forms, what's actually drawn), NOT
+            // the logical string, so the overflow test matches the painted glyphs.
+            lv_point_t hl_size = {0, 0};
+            lv_text_get_size(&hl_size, lv_label_get_text(headline_label), &BODY_FONT,
+                             0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+
+            if (hl_size.x > upper_body_content_width && !seedsigner_locale_is_rtl()) {
+                // LTR overflow: clamp the label to the text column (so it scrolls
+                // within the same gutters as the body, never up to the screen edge
+                // or under the warning border), then start-justify (LEFT) +
+                // continuous marquee with the initial/per-wrap hold + true 40 px/sec
+                // (shared with the top_nav title). The upper_body flex centers the
+                // narrower label, yielding equal `text_inset` gutters. Shaped hi/th
+                // ride Task 0's offset-aware glyph-run draw. RTL (ur) is gated out
+                // here to match Task 0 / glyph_run_draw_cb (the offset, scroll
+                // start-justify, and content-box clip are all LTR-only for now); an
+                // overflowing ur headline keeps the legacy LONG_DOT path below, so ur
+                // stays byte-identical and its RTL scroll lands with the ur RTL track.
+                int32_t scroll_width = upper_body_content_width - 2 * text_inset;
+                if (scroll_width < 16) {
+                    scroll_width = 16;
+                }
+                lv_obj_set_width(headline_label, scroll_width);
+                lv_obj_set_style_text_align(headline_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+                label_set_line_autoscroll(headline_label);
+            } else {
+                // Fits (any locale) or RTL overflow: centered on the full width +
+                // ellipsis-capable, exactly as before (byte-identical).
+                lv_obj_set_width(headline_label, upper_body_content_width);
+                lv_label_set_long_mode(headline_label, LV_LABEL_LONG_DOT);
+                lv_obj_set_style_text_align(headline_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+            }
             // Python's gap is CP/2 between the icon's visible bottom and the
             // headline's VISIBLE top. The label adds top leading above the caps
             // that PIL does not, so subtract it — otherwise the gap reads ~2x too
@@ -951,11 +994,10 @@ void large_icon_status_screen(void *ctx_json) {
     if (cfg.contains("text") && cfg["text"].is_string()) {
         std::string text = cfg["text"].get<std::string>();
         if (!text.empty()) {
-            // Inset the body text by `text_edge_padding` on each side so it
-            // never sits under the pulsing warning border (warning variants
-            // double the inset; success uses a single EDGE_PADDING).
-            int32_t inset = defaults.text_edge_padding_multiplier * EDGE_PADDING;
-            int32_t text_width = upper_body_content_width - 2 * inset;
+            // Inset the body text by `text_inset` on each side (computed above,
+            // shared with the headline's scroll column) so it never sits under the
+            // pulsing warning border.
+            int32_t text_width = upper_body_content_width - 2 * text_inset;
             if (text_width < 16) {
                 text_width = 16;
             }

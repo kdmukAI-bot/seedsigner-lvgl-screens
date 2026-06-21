@@ -53,6 +53,41 @@
             "title": "Donaudampfschifffahrtsgesellschaftskapitaensanwaerterpruefungsordnung"
           }
         }
+      },
+      {
+        "name": "intro_text",
+        "context": {
+          "top_nav": {
+            "title": "Export Wallet",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "text": "Choose how to export this wallet's public descriptor. The QR option encodes the descriptor for an air-gapped transfer; the file options write it to the SD card. Review the coordinator's requirements before you continue, then pick the format it expects.",
+          "button_list": [
+            "QR code",
+            "JSON file",
+            "Text file",
+            "Specter desktop",
+            "Sparrow",
+            "BlueWallet"
+          ]
+        }
+      },
+      {
+        "name": "intro_text_fits",
+        "context": {
+          "top_nav": {
+            "title": "Export Wallet",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "text": "Pick an export format.",
+          "button_list": [
+            "QR code",
+            "JSON file",
+            "Text file"
+          ]
+        }
       }
     ]
   },
@@ -116,6 +151,42 @@
           "warning_edges": true,
           "animated": true,
           "animation_seconds": 1.4
+        }
+      },
+      {
+        "name": "long_text_overflow",
+        "context": {
+          "top_nav": { "title": "Caution", "show_back_button": true, "show_power_button": false },
+          "status_type": "dire_warning",
+          "status_headline": "SeedQR is your private key!",
+          "text": "Anyone who sees this QR code can steal all of your funds. Never photograph it, never scan it into a device that connects to the internet, and never store it digitally. Treat it exactly like the seed phrase itself: write it on paper or steel, keep it offline, and store it somewhere only you can reach. If you are not certain this environment is private and air-gapped, go back now and do not display the code.",
+          "button_list": ["I understand"],
+          "is_bottom_list": true,
+          "warning_edges": true
+        }
+      },
+      {
+        "name": "long_text_overflow_plain",
+        "context": {
+          "top_nav": { "title": "Caution", "show_back_button": true, "show_power_button": false },
+          "status_type": "dire_warning",
+          "status_headline": "SeedQR is your private key!",
+          "text": "Anyone who sees this QR code can steal all of your funds. Never photograph it, never scan it into a device that connects to the internet, and never store it digitally. Treat it exactly like the seed phrase itself: write it on paper or steel, keep it offline, and store it somewhere only you can reach. If you are not certain this environment is private and air-gapped, go back now and do not display the code.",
+          "button_list": ["I understand"],
+          "is_bottom_list": true,
+          "warning_edges": false
+        }
+      },
+      {
+        "name": "newline",
+        "context": {
+          "top_nav": { "title": "Backup Verified", "show_back_button": false, "show_power_button": false },
+          "status_type": "success",
+          "status_headline": "Success!",
+          "text": "First line stands alone.\nThe second paragraph is longer, so it wraps onto more than one line by itself.",
+          "button_list": ["OK"],
+          "is_bottom_list": true,
+          "warning_edges": false
         }
       }
     ]

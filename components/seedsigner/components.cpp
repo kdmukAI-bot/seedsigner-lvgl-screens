@@ -1,6 +1,7 @@
 #include "components.h"
 #include "gui_constants.h"
-#include "input_profile.h"
+#include "font_registry.h"
+#include "glyph_runs.h"
 #include "seedsigner.h"
 #include "lvgl.h"
 
@@ -103,6 +104,93 @@ static lv_obj_t* top_nav_icon_button(lv_obj_t* lv_parent, const char* icon, lv_a
     return btn;
 }
 
+// See components.h: width of a label's STORED (presentation-form) text at `font`.
+// The single home for the exact lv_text_get_size args every overflow check uses, so
+// the "measure the stored text, not the logical argument" convention can't drift.
+int32_t label_subset_text_width(lv_obj_t* label, const lv_font_t* font) {
+    lv_point_t size = {0, 0};
+    lv_text_get_size(&size, lv_label_get_text(label), font, 0, 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    return size.x;
+}
+
+// Configure an already start-justified, width-constrained single-line label to
+// auto-scroll its overflowing text: optionally hold start-justified for an initial
+// beat (`begin_hold_ms`, so the reader absorbs the screen + the start of the line),
+// then continuously marquee-scroll (circular wrap) at a steady ~LINE_SCROLL_PX_PER_SEC,
+// holding again (`loop_hold_ms`) each time the line wraps back to the start. The two
+// holds are independent: the top-nav title + long status headline pass
+// LINE_SCROLL_BEGIN_HOLD_MS (~1 s) for both; the touch long-press-to-scroll gesture
+// passes begin_hold=0 (immediate — the long-press IS the pause, and the label clips back
+// on release so an initial hold would hide the motion behind a quick release) but keeps
+// loop_hold=LINE_SCROLL_BEGIN_HOLD_MS so it still pauses each time it returns to the
+// start. The circular wrap reads better than Python's back-and-forth ping-pong; the
+// per-loop start hold is the part of Python's feel worth keeping.
+//
+// Speed: we set an EXPLICIT per-line duration (style anim_duration in ms) rather than
+// LVGL's px/sec speed encoding — the encoding caps the resolved duration at ~10 s, so
+// a long line (e.g. the 60-char German stress title) would otherwise run noticeably
+// faster than the target. CIRCULAR scrolls the whole line plus a WAIT_CHAR gap before
+// it wraps, so duration = (text_width + gap) / px_per_sec gives a true constant rate.
+// The holds come from a static template anim: the label's circular scroll setup
+// (lv_label.c overwrite_anim_property, SCROLL_CIRCULAR) copies our act_time /
+// repeat_cnt / repeat_delay out of it —
+//   - act_time = -begin_hold_ms   -> the FIRST hold (negative act_time == start delay),
+//   - repeat_delay = loop_hold_ms -> the hold each time the loop wraps to the start,
+//   - repeat_cnt = INFINITE       -> keep looping (lv_anim_init defaults this to 1!).
+// (begin_hold_ms == 0 leaves act_time at 0 -> scrolls immediately; loop_hold_ms is
+// independent, so the wrap-to-start pause can stay on.) CIRCULAR has no reverse phase,
+// so reverse_delay is not copied / set.
+void label_set_line_autoscroll(lv_obj_t* label, uint32_t begin_hold_ms, uint32_t loop_hold_ms) {
+    if (!label) {
+        return;
+    }
+    lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR);  // continuous wrap
+
+    // ~40 px/sec at the Pi Zero reference (PX_MULTIPLIER=100), scaled for taller
+    // displays so the visual speed (text-widths per second) stays constant.
+    uint32_t px_per_sec = (uint32_t)LINE_SCROLL_PX_PER_SEC * active_profile().px_multiplier / 100;
+    if (px_per_sec < 1) {
+        px_per_sec = 1;
+    }
+
+    // Measure the line LVGL will scroll: the stored (presentation-form) text at the
+    // label's font + letter spacing, plus the WAIT_CHAR space gap CIRCULAR adds before
+    // the wrap — i.e. the same distance the offset animation travels. Set the duration
+    // so that distance is covered at px_per_sec (floored so a tiny overflow can't
+    // produce a jittery sub-300 ms scroll).
+    const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    lv_point_t line_size = {0, 0};
+    lv_text_get_size(&line_size, lv_label_get_text(label), font,
+                     lv_obj_get_style_text_letter_space(label, LV_PART_MAIN), 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int32_t scroll_distance = seedsigner_circular_scroll_period(font, line_size.x);
+    uint32_t duration_ms = (uint32_t)((int64_t)scroll_distance * 1000 / px_per_sec);
+    if (duration_ms < (uint32_t)LINE_SCROLL_MIN_MS) {
+        duration_ms = (uint32_t)LINE_SCROLL_MIN_MS;
+    }
+    lv_obj_set_style_anim_duration(label, duration_ms, LV_PART_MAIN);
+
+    // Per-wrap "feel": the initial + per-loop holds, applied via a style anim
+    // TEMPLATE. CAUTION: lv_obj_set_style_anim keeps only a POINTER to this template
+    // and reads it LAZILY at the (deferred) lv_label_refr_text — it does NOT copy the
+    // fields out here. So this one function-local static is shared by every
+    // autoscrolling label, and overwriting it between a set() and that label's deferred
+    // refresh would hand the earlier label the LATER caller's holds. That is safe today
+    // only because the holds never actually differ before a refresh: every build-time
+    // caller (title, headline) passes the same LINE_SCROLL_BEGIN_HOLD_MS, and the one
+    // caller that passes begin_hold=0 (the touch long-press) fires from a user gesture
+    // long after the build-time labels have refreshed. If a future caller sets a
+    // DIFFERENT hold on a second label during the SAME build, give it its own template
+    // instance (or a per-label static) rather than reusing this shared one.
+    static lv_anim_t scroll_feel_template;
+    lv_anim_init(&scroll_feel_template);
+    lv_anim_set_delay(&scroll_feel_template, begin_hold_ms);   // act_time = -begin hold (0 = none)
+    scroll_feel_template.repeat_cnt   = LV_ANIM_REPEAT_INFINITE;  // keep the infinite loop
+    scroll_feel_template.repeat_delay = loop_hold_ms;            // hold on each wrap to start
+    lv_obj_set_style_anim(label, &scroll_feel_template, LV_PART_MAIN);
+}
+
 lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button, bool show_power_button, lv_obj_t **out_back_btn, lv_obj_t **out_power_btn, const lv_font_t *title_font) {
 
     lv_parent = lv_parent ? lv_parent : lv_scr_act();
@@ -166,29 +254,41 @@ lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button,
         label_w = 16;
     }
 
-    // Measure with the font actually applied to the label (title_font override
-    // or the default), not always the default.
+    // Measure the title at its ACTUAL rendered width. With LV_USE_ARABIC_PERSIAN_
+    // CHARS, lv_label_set_text rewrites Arabic/Persian into (narrower) presentation
+    // forms and stores THAT; the subset fonts carry the presentation forms, not the
+    // base codepoints. So measuring the original `label_text` over-counts massively
+    // (raw codepoints fall back to missing-glyph boxes) and wrongly tripped the
+    // overflow branch, left-aligning RTL titles off-center. Measure the label's
+    // stored (shaped) text instead — identical to `label_text` for LTR locales, so
+    // their layout is unchanged. Width is direction-independent, so measuring before
+    // the RTL base_dir post-pass is fine.
     const lv_font_t *eff_font = title_font ? title_font : &TOP_NAV_TITLE_FONT;
-    lv_point_t text_size = {0, 0};
-    lv_text_get_size(&text_size, label_text, eff_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int32_t title_w = label_subset_text_width(label, eff_font);
 
-    if (text_size.x > label_w) {
-        // Overflow case: clip + scroll within the region between the buttons.
+    if (title_w > label_w) {
+        // Overflow case: clip + scroll within the region between the buttons. The
+        // title starts start-justified (left here; shaped RTL via the glyph-run draw)
+        // then continuously marquee-scrolls with an initial hold + a hold each time it
+        // wraps back to the start, at ~40 px/sec (label_set_line_autoscroll; it tunes
+        // the bare LONG_SCROLL_CIRCULAR set above). Shaped (hi/th) titles ride the same
+        // offset animation now that the glyph-run draw honors label->offset.x (Task 0).
         lv_obj_set_width(label, label_w);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
         lv_obj_align(label, LV_ALIGN_LEFT_MID, left_pad, 0);
+        label_set_line_autoscroll(label, LINE_SCROLL_BEGIN_HOLD_MS, LINE_SCROLL_BEGIN_HOLD_MS);
     } else {
         // Title fits. Prefer centering on the full nav width (visually centered
         // on screen). But if that would push the text under a side button — the
         // in-between case where the title is too short to scroll yet long enough
         // to intrude given the asymmetric button padding — fall back to centering
         // it within the available region between the buttons so it never overlaps.
-        int32_t centered_left = (nav_w - text_size.x) / 2;
+        int32_t centered_left = (nav_w - title_w) / 2;
         bool full_center_safe = (centered_left >= left_pad) &&
-                                (centered_left + text_size.x <= nav_w - right_pad);
+                                (centered_left + title_w <= nav_w - right_pad);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
         if (full_center_safe) {
-            lv_obj_set_width(label, text_size.x);
+            lv_obj_set_width(label, title_w);
             lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
         } else {
             lv_obj_set_width(label, label_w);
@@ -231,14 +331,124 @@ void button_set_active(lv_obj_t* lv_button, bool active) {
 }
 
 
+// In hardware/joystick mode the focused button's too-wide text label marquee-
+// scrolls (LONG_SCROLL_CIRCULAR); when it loses focus it clips back to its START
+// edge (LONG_CLIP) so the beginning of the label shows again. Called from the nav
+// layer (navigation.cpp update_visual_focus) — body buttons are deliberately kept
+// out of the LVGL focus group, so LVGL never emits the FOCUSED/DEFOCUSED that would
+// otherwise drive this (and emitting them by hand would add LV_STATE_FOCUSED and
+// fight our manual highlight). Touch has no persistent focus, so it never calls in.
+//
+// Shaped (glyph-run) locales are excluded: their labels are painted by
+// glyph_run_draw_cb from a baked alpha mask that ignores the label's scroll offset
+// (so a marquee animation wouldn't move the glyphs), AND that draw path start-
+// justifies an overflowing run only while the label stays LONG_CLIP. They keep
+// LONG_CLIP (start-justified) — no active-scroll. (A14)
+void button_set_label_marquee(lv_obj_t* lv_button, bool marquee) {
+    if (!lv_button || seedsigner_locale_uses_glyph_runs()) {
+        return;
+    }
+    lv_obj_t* label = find_last_label_child(lv_button);
+    if (!label) {
+        return;
+    }
+
+    // lv_label_set_long_mode unconditionally deletes the scroll animation, resets
+    // the offset, and marks a text refresh — so only touch it on an ACTUAL change.
+    // update_visual_focus re-asserts every non-focused button on each keypress, so
+    // an unguarded call would needlessly re-clip (and redraw) the whole list every
+    // step, and re-setting SCROLL on the still-focused button would restart its
+    // marquee from the beginning.
+    lv_label_long_mode_t want = marquee ? LV_LABEL_LONG_SCROLL_CIRCULAR
+                                        : LV_LABEL_LONG_CLIP;
+    if (lv_label_get_long_mode(label) != want) {
+        lv_label_set_long_mode(label, want);
+    }
+}
+
+
 extern "C" __attribute__((weak)) void seedsigner_lvgl_on_button_selected(uint32_t index, const char *label) {
     (void)index;
     (void)label;
 }
 
+// --- Touch long-press-to-scroll (Item 3) ------------------------------------------
+//
+// In TOUCH mode a button has no persistent focus, so an overflowing label can't
+// marquee on focus the way it does on hardware (button_set_label_marquee, driven from
+// the nav layer). The discovery gesture instead: press-and-HOLD a button to scroll its
+// label and read the full text WITHOUT selecting; a short tap still selects. A
+// long-press "consumes" the gesture so the release does not select. The hardware path
+// synthesizes CLICKED directly (no press cycle) and never reaches the long-press here.
+
+// Whether a button's (single-line) text label is wider than its content box — i.e. it
+// clips and would benefit from scrolling. Mirrors the overflow tests the rest of the
+// code already makes so the gesture scrolls exactly the labels that clip: the shaped
+// path asks the baked glyph run (the codepoint measure mis-counts presentation forms /
+// conjuncts), the subset/Latin path measures the stored presentation-form text.
+static bool button_label_overflows(lv_obj_t* label) {
+    if (!label) {
+        return false;
+    }
+    int32_t content_w = lv_obj_get_content_width(label);
+    if (content_w <= 0) {
+        return false;
+    }
+
+    // Shaped (glyph-run) label: trust the baked run's true typographic width. -1 means
+    // no run is attached (a plain codepoint label even within a shaping locale) — fall
+    // through to the codepoint measure.
+    int run_overflow = seedsigner_label_run_overflows(label);
+    if (run_overflow >= 0) {
+        return run_overflow > 0;
+    }
+
+    const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    return label_subset_text_width(label, font) > content_w;
+}
+
+// Start a button's text label scrolling for a touch long-press. Returns true only if a
+// scroll was actually started (label overflows AND the locale is in scope), so the
+// caller marks the press "consumed" and suppresses the release-select — when nothing
+// scrolls, a too-long press on a normal button still selects. RTL (fa/ur) is excluded:
+// the glyph-run draw's offset/scroll path is LTR-only for now (Task 0), matching the
+// hardware marquee and the title/headline auto-scroll. Shaped LTR (hi/th) ride Task 0.
+static bool button_start_label_scroll(lv_obj_t* btn) {
+    if (!btn || seedsigner_locale_is_rtl()) {
+        return false;
+    }
+    lv_obj_t* label = find_last_label_child(btn);
+    if (!label || !button_label_overflows(label)) {
+        return false;
+    }
+    // Start scrolling immediately (begin_hold = 0): the long-press itself is the pause,
+    // and the label clips back on release, so an initial hold would hide the motion
+    // behind a quick release. Keep the per-wrap hold so it still pauses each time it
+    // returns to the start (same beat the title/headline scroll uses).
+    label_set_line_autoscroll(label, 0, LINE_SCROLL_BEGIN_HOLD_MS);
+    return true;
+}
+
+// Restore a button's text label to its at-rest clipped state (start-justified, tail
+// clipped) after a touch long-press scroll ends. Guarded against a redundant set:
+// lv_label_set_long_mode unconditionally tears down the scroll anim and forces a text
+// refresh, so only touch it when the label is actually mid-scroll.
+static void button_clip_label(lv_obj_t* btn) {
+    if (!btn) {
+        return;
+    }
+    lv_obj_t* label = find_last_label_child(btn);
+    if (label && lv_label_get_long_mode(label) != LV_LABEL_LONG_CLIP) {
+        lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+    }
+}
+
 static lv_obj_t *s_press_btn = NULL;
 static lv_point_t s_press_point = {0, 0};
 static bool s_press_dragged = false;
+// A long-press scrolled this press's label, so its release must NOT select. Reset on
+// each new PRESSED; cleared once the suppressed CLICKED (or a lost press) handles it.
+static bool s_press_scrolled = false;
 void button_toggle_callback(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t* btn = (lv_obj_t *)lv_event_get_target(e);
@@ -248,6 +458,7 @@ void button_toggle_callback(lv_event_t* e) {
     if (code == LV_EVENT_PRESSED) {
         s_press_btn = btn;
         s_press_dragged = false;
+        s_press_scrolled = false;
         if (indev) {
             lv_indev_get_point(indev, &s_press_point);
         }
@@ -270,8 +481,41 @@ void button_toggle_callback(lv_event_t* e) {
         return;
     }
 
+    if (code == LV_EVENT_LONG_PRESSED) {
+        // Touch press held past the long-press threshold: reveal an overflowing label
+        // by scrolling it and consume the gesture so the upcoming release does NOT
+        // select. Only for touch (the hardware path never presses, so it never gets
+        // here), on the still-pressed button, and only if the press hasn't become a
+        // drag. button_start_label_scroll returns false (leaving the press unconsumed)
+        // when nothing actually scrolls — a fitting label or an RTL locale — so a
+        // too-long press on a normal button still selects on release.
+        bool is_touch = (indev != NULL && lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER);
+        if (is_touch && btn == s_press_btn && !s_press_dragged) {
+            s_press_scrolled = button_start_label_scroll(btn);
+        }
+        return;
+    }
+
     if (code == LV_EVENT_RELEASED) {
-        // Keep press state until CLICKED is evaluated.
+        // Press ended (finger up). If a long-press had started the label scrolling,
+        // clip it back to its start now. RELEASED always precedes the CLICKED that
+        // follows (and still fires when the press became a list-scroll, where no
+        // CLICKED comes at all), so this is the reliable place to restore the label.
+        // s_press_scrolled is left set for CLICKED to suppress the selection.
+        if (s_press_scrolled && btn == s_press_btn) {
+            button_clip_label(btn);
+        }
+        return;
+    }
+
+    if (code == LV_EVENT_PRESS_LOST) {
+        // The press was taken over (e.g. the list began scrolling) or otherwise lost;
+        // no CLICKED will follow, so the gesture is over. Clip any long-press scroll
+        // back and clear the consumed flag.
+        if (s_press_scrolled && btn == s_press_btn) {
+            button_clip_label(btn);
+        }
+        s_press_scrolled = false;
         return;
     }
 
@@ -291,6 +535,16 @@ void button_toggle_callback(lv_event_t* e) {
         if (s_press_btn != btn || s_press_dragged) {
             s_press_btn = NULL;
             s_press_dragged = false;
+            s_press_scrolled = false;
+            return;
+        }
+        if (s_press_scrolled) {
+            // A long-press already revealed this label by scrolling it; this release is
+            // the END of that discovery gesture, not a selection. (RELEASED already
+            // clipped the label back.) Swallow the click.
+            s_press_btn = NULL;
+            s_press_dragged = false;
+            s_press_scrolled = false;
             return;
         }
     }
@@ -340,18 +594,78 @@ void button_toggle_callback(lv_event_t* e) {
 
     s_press_btn = NULL;
     s_press_dragged = false;
+    s_press_scrolled = false;
 }
 
 
-// In joystick mode, labels scroll only when their parent button is focused.
-static void label_scroll_on_focus(lv_event_t *e) {
-    lv_obj_t *text_label = find_last_label_child((lv_obj_t *)lv_event_get_target(e));
-    if (text_label) lv_label_set_long_mode(text_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+// Size a button's text label to the button's content box and pick the label's
+// text alignment from whether the (single-line) text fits:
+//   fits      -> centered (visual parity with the Python screens)
+//   too wide  -> START edge (LTR: left, RTL: right) so the BEGINNING of the label
+//                shows instead of LONG_CLIP clipping to its middle.
+//
+// Re-runs on every resize (registered as an LV_EVENT_SIZE_CHANGED handler) so a
+// button whose final width is set AFTER creation gets correct label geometry.
+// The driving case is the main-menu 2x2 grid: large_icon_button() builds a
+// full-body-width label via button(), then main_menu_screen resizes the button
+// to a half-width grid cell — leaving the label stale-wide so overflow was never
+// detected and the centered label clipped to its middle (the Persian "Seeds"
+// symptom). Fixing the width here re-evaluates that automatically.
+//
+// Shaped (glyph-run) locales are NOT measured here: lv_text_get_size over their
+// codepoint text mis-counts the on-screen presentation forms / conjuncts. Their
+// alignment is decided later in glyph_run_draw_cb, which knows the run's true
+// advance and start-justifies an overflowing run there. So we only fix the label
+// WIDTH for them and leave the alignment CENTER.
+static void apply_button_label_layout(lv_obj_t* btn) {
+    lv_obj_t* label = find_last_label_child(btn);
+    if (!label) return;
+
+    // Give the label the button's FULL content box. The button already carries the
+    // theme's horizontal padding (text off the rounded corners), so no extra inset
+    // is needed — and an extra inset only shows up as oversized side margins once a
+    // too-wide label is start-justified (it's invisible while centered). Using the
+    // full width also stops a snug label (e.g. the narrow main-menu grid's
+    // "Settings") from being falsely treated as overflowing and clipped.
+    int32_t available_w = lv_obj_get_content_width(btn);
+    if (available_w < 0) available_w = 0;
+    lv_obj_set_width(label, available_w);
+
+    // Default to centered (parity with the Python screens). Unshaped locales then
+    // measure the text here and flip to the START edge when it overflows; shaped
+    // (glyph-run) locales stay CENTER and let glyph_run_draw_cb start-justify an
+    // overflowing run — lv_text_get_size over their codepoint text mis-counts the
+    // on-screen presentation forms / conjuncts, so the run's true advance (known
+    // only in the draw pass) is the right measure for them.
+    lv_text_align_t align = LV_TEXT_ALIGN_CENTER;
+    if (!seedsigner_locale_uses_glyph_runs()) {
+        // Measure the label's STORED text — with LV_USE_ARABIC_PERSIAN_CHARS,
+        // lv_label_set_text rewrites Arabic/Persian into (narrower) presentation
+        // forms and stores THAT; the subset fonts carry those forms, not the base
+        // codepoints. Measuring the original argument would over-count and falsely
+        // trip overflow (same rationale as top_nav()'s A4 fix). Width is
+        // direction-independent.
+        const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+        if (label_subset_text_width(label, font) > available_w) {
+            align = seedsigner_locale_is_rtl() ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT;
+        }
+    }
+    lv_obj_set_style_text_align(label, align, LV_PART_MAIN);
 }
 
-static void label_clip_on_defocus(lv_event_t *e) {
-    lv_obj_t *text_label = find_last_label_child((lv_obj_t *)lv_event_get_target(e));
-    if (text_label) lv_label_set_long_mode(text_label, LV_LABEL_LONG_CLIP);
+static void button_size_changed_cb(lv_event_t* e) {
+    lv_obj_t* btn = lv_event_get_target_obj(e);
+    // Only the main-menu grid (large_icon_button, a FLEX column) needs its label
+    // re-fixed on resize: button() builds the label at the full body width, then
+    // main_menu_screen shrinks the button to an exact half-width cell. Plain
+    // buttons are left exactly as created — screens that resize them (e.g. the
+    // status screen, which insets its buttons to body_w - 2*EDGE_PADDING) already
+    // size to their final width, and re-fixing here would double-inset and wrongly
+    // clip the label. The grid is sized to an EXACT width (no inset), so re-fixing
+    // it converges on the right geometry.
+    if (lv_obj_get_style_layout(btn, LV_PART_MAIN) == LV_LAYOUT_FLEX) {
+        apply_button_label_layout(btn);
+    }
 }
 
 
@@ -369,25 +683,42 @@ lv_obj_t* button(lv_obj_t* lv_parent, const char* text, lv_obj_t* align_to) {
 
     reset_button_chrome(lv_button);
 
+    // Use COMPONENT_PADDING for the label's side margin instead of the LVGL theme's
+    // default button pad_hor (PAD_DEF, ~13px at 240 — wider than our 8px rhythm).
+    // Invisible while a label is centered (the content box stays symmetric, so
+    // centered text is byte-identical), this gives a start-justified too-wide label
+    // a consistent COMPONENT_PADDING gutter on both the plain and grid buttons.
+    lv_obj_set_style_pad_hor(lv_button, COMPONENT_PADDING, LV_PART_MAIN);
+
     lv_obj_t* label = lv_label_create(lv_button);
     lv_obj_set_style_text_font(label, &BUTTON_FONT, LV_PART_MAIN);
-    lv_obj_set_width(label, lv_obj_get_content_width(lv_button) - 2 * EDGE_PADDING);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    if (input_profile_get_mode() == INPUT_MODE_TOUCH) {
-        lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    } else {
-        lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
-        lv_obj_add_event_cb(lv_button, label_scroll_on_focus, LV_EVENT_FOCUSED, NULL);
-        lv_obj_add_event_cb(lv_button, label_clip_on_defocus, LV_EVENT_DEFOCUSED, NULL);
-    }
+
+    // Labels are STATIC (LONG_CLIP) at rest — a too-wide label start-justifies and
+    // clips its tail rather than marquee-scrolling. On hardware the nav layer
+    // promotes the focused button's label to a marquee scroll via
+    // button_set_label_marquee() (driven from update_visual_focus, since body
+    // buttons are kept out of the LVGL focus group). Touch has no persistent focus,
+    // so its labels stay clipped.
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+
     lv_label_set_text(label, text);
     lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
-    // Wire up gesture-aware input callback
+    // Size the label to the button's content box and choose its text alignment
+    // (centered if it fits, start-justified if too wide). Re-run on every resize so
+    // buttons resized after creation (the main-menu grid) fix their label geometry.
+    apply_button_label_layout(lv_button);
+    lv_obj_add_event_cb(lv_button, button_size_changed_cb, LV_EVENT_SIZE_CHANGED, NULL);
+
+    // Wire up gesture-aware input callback. LONG_PRESSED drives the touch
+    // long-press-to-scroll reveal; PRESS_LOST restores the label if the press is taken
+    // over (e.g. the list scrolls) without a CLICKED.
     lv_obj_add_event_cb(lv_button, button_toggle_callback, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(lv_button, button_toggle_callback, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(lv_button, button_toggle_callback, LV_EVENT_LONG_PRESSED, NULL);
     lv_obj_add_event_cb(lv_button, button_toggle_callback, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(lv_button, button_toggle_callback, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(lv_button, button_toggle_callback, LV_EVENT_PRESS_LOST, NULL);
 
     // Default to inactive state
     button_set_active(lv_button, false);
@@ -407,18 +738,39 @@ lv_obj_t* large_icon_button(lv_obj_t* lv_parent, const char* icon, const char* t
     lv_obj_t* text_label = lv_obj_get_child(lv_button, 0);
     lv_obj_set_style_text_font(text_label, &LARGE_BUTTON_FONT, LV_PART_MAIN);
 
-    // Switch to vertical flex layout: icon above text.
+    // Vertical flex layout: icon above text, the block VERTICALLY CENTERED in the
+    // button. Plain centering would float the icon up because the text font's empty
+    // descent (no menu label has descenders) sits below the visible text and biases
+    // the box's geometric center below its visual center. Compensate by reserving a
+    // top pad equal to that descent (the text font's base_line): centering the block
+    // within [base_line .. height] then leaves EQUAL visible space above the icon ink
+    // and below the text ink at every display size (240/320 stay tight like Python's
+    // MainMenuView.png; 480/800 no longer float high in their taller buttons).
     lv_obj_set_layout(lv_button, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(lv_button, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(lv_button, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(lv_button, COMPONENT_PADDING, LV_PART_MAIN);
-    lv_obj_set_style_pad_row(lv_button, COMPONENT_PADDING, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(lv_button, LARGE_BUTTON_FONT.base_line, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(lv_button, 0, LV_PART_MAIN);
 
     // Insert the icon label before the text label (which button() already created).
     lv_obj_t* icon_label = lv_label_create(lv_button);
     lv_obj_set_style_text_font(icon_label, &ICON_LARGE_BUTTON_FONT__SEEDSIGNER, LV_PART_MAIN);
+    // Strip the icon label's default box padding so its box equals the icon font's
+    // line_height (base_line=0, glyph fills the box). The icon ink then anchors the
+    // gaps directly instead of a padded box inflating them — the same cap-height
+    // technique the status-screen hero icon uses.
+    lv_obj_set_style_pad_all(icon_label, 0, LV_PART_MAIN);
     lv_label_set_text(icon_label, icon ? icon : "");
     lv_obj_move_to_index(icon_label, 0);
+
+    // Icon->text gap: target a VISUAL COMPONENT_PADDING (ink-to-ink), like Python.
+    // LVGL anchors the text box by the font ascent, which carries empty leading above
+    // the caps; subtract that leading from the flex row gap so the visible label sits
+    // a true COMPONENT_PADDING below the icon (not COMPONENT_PADDING + leading).
+    int32_t leading = text_top_leading(&LARGE_BUTTON_FONT, lv_label_get_text(text_label));
+    int32_t row_gap = COMPONENT_PADDING - leading;
+    if (row_gap < 0) row_gap = 0;
+    lv_obj_set_style_pad_row(lv_button, row_gap, LV_PART_MAIN);
 
     return lv_button;
 }

@@ -152,7 +152,17 @@ static void load_screen_and_cleanup_previous(lv_obj_t *new_screen) {
 // boilerplate.
 static lv_obj_t* create_standard_body_content(lv_obj_t *screen, lv_obj_t *top_nav_obj, bool scrollable) {
     lv_obj_t* body_content = lv_obj_create(screen);
-    lv_obj_set_size(body_content, lv_obj_get_width(screen), lv_obj_get_height(screen) - TOP_NAV_HEIGHT);
+
+    // The body sits directly below the full top_nav (TOP_NAV_HEIGHT tall) and clips
+    // at TOP_NAV_HEIGHT. The top_nav vertically centers its buttons, so the space
+    // between a button's bottom edge and TOP_NAV_HEIGHT is a visual buffer OWNED BY
+    // THE TOP_NAV: scrolling body content clips at TOP_NAV_HEIGHT and never renders
+    // up against the back/power buttons — the buffer stays between the nav and the
+    // moving content. (An earlier revision pushed this buffer down into the body so
+    // a screen could overlap an element up into the nav, but that let scrolled
+    // content collide with the nav buttons; the buffer belongs to the top_nav.)
+    lv_obj_set_size(body_content, lv_obj_get_width(screen),
+                    lv_obj_get_height(screen) - TOP_NAV_HEIGHT);
     lv_obj_align_to(body_content, top_nav_obj, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(body_content, lv_color_hex(BACKGROUND_COLOR), LV_PART_MAIN);
     lv_obj_set_style_pad_left(body_content, EDGE_PADDING, LV_PART_MAIN);
@@ -219,6 +229,15 @@ static size_t nav_initial_index_from_cfg(const json &cfg, size_t default_index) 
 // Shared nav wiring helper for all screens.
 // Screens provide only focusables/layout/default body index; this helper applies
 // top-nav wiring, aux-key policy, mode override, and binds nav in one place.
+//
+// Scroll-then-buttons joystick navigation (see navigation.h) is enabled
+// AUTOMATICALLY here — no per-screen opt-in. The trigger is a vertical screen with
+// non-focusable upper content (a separate, populated `upper_body`) above its
+// buttons whose body overflows the viewport: e.g. an overflowing
+// large_icon_status_screen, or a button_list_screen with intro text. A pure button
+// list (upper_body == body) is excluded — it scrolls via item-focus navigation —
+// as are grid layouts (main_menu) and screens that never call this helper
+// (seed_add_passphrase, screensaver).
 static void bind_screen_navigation(const json &cfg,
                                    const screen_scaffold_t &screen,
                                    lv_obj_t **body_items,
@@ -228,6 +247,24 @@ static void bind_screen_navigation(const json &cfg,
     bool has_input_mode_override = false;
     input_mode_t input_mode_override = INPUT_MODE_TOUCH;
     nav_mode_override_from_cfg(cfg, has_input_mode_override, input_mode_override);
+
+    // Auto-detect scroll-then-buttons: a vertical screen with a separate, populated
+    // upper_body (non-focusable content above the buttons) whose body overflows the
+    // viewport. lv_obj_update_layout forces geometry so lv_obj_get_scroll_bottom is
+    // accurate; it runs only for screens with such upper content, so pure button
+    // lists (upper_body == body) and grids pay nothing and stay byte-identical.
+    lv_obj_t *scroll_obj = nullptr;
+    bool scroll_then_buttons = false;
+    if (body_layout == NAV_BODY_VERTICAL &&
+        body_item_count > 0 &&
+        screen.upper_body && screen.upper_body != screen.body &&
+        lv_obj_get_child_cnt(screen.upper_body) > 0) {
+        lv_obj_update_layout(screen.body);
+        if (lv_obj_get_scroll_bottom(screen.body) > 0) {
+            scroll_obj = screen.body;
+            scroll_then_buttons = true;
+        }
+    }
 
     nav_config_t nav_cfg;
     nav_cfg.screen = screen.screen;
@@ -240,6 +277,8 @@ static void bind_screen_navigation(const json &cfg,
     nav_cfg.initial_body_index = nav_initial_index_from_cfg(cfg, default_initial_index);
     nav_cfg.has_input_mode_override = has_input_mode_override;
     nav_cfg.input_mode_override = input_mode_override;
+    nav_cfg.scroll_obj = scroll_obj;
+    nav_cfg.scroll_then_buttons = scroll_then_buttons;
     nav_bind(&nav_cfg);
 }
 
@@ -273,22 +312,28 @@ static bool read_button_list_labels(const json &cfg, std::vector<std::string> &o
 // present) a flex-column body that stacks `upper_body`, an optional
 // flex-grow=1 spacer, and one button per `cfg["button_list"]` label.
 //
-// Three usage patterns:
+// Usage patterns:
 //
-// 1. No button_list (e.g. `main_menu_screen`, `screensaver_screen`,
-//    `demo_screen`): the body is the existing non-flex container,
-//    `upper_body == body`, no scaffold-managed buttons.
+// 1. No button_list (e.g. `main_menu_screen`, `screensaver_screen`):
+//    the body is the existing non-flex container, `upper_body == body`,
+//    no scaffold-managed buttons.
 //
-// 2. button_list present, is_bottom_list omitted/false (legacy
-//    `button_list_screen` behavior): vertical-flex body with
-//    `upper_body` (LV_SIZE_CONTENT, height 0 if nothing added) followed
-//    directly by buttons. Buttons stack from the top.
+// 2. button_list present, no upper content (is_bottom_list omitted/false
+//    AND no `cfg["text"]`): the legacy pure-list path — top-aligned
+//    `button()` chain in a plain body, `upper_body == body`. Kept
+//    byte-identical to the original `button_list_screen`. Such a list
+//    scrolls (when it overflows) via item-focus navigation, not a
+//    page-scroll step.
 //
-// 3. button_list present, is_bottom_list=true (status / confirmation
-//    screens): same as #2 plus a flex-grow=1 spacer between
-//    `upper_body` and the first button. Buttons pin to the viewport
-//    bottom while content fits; the spacer collapses and content/buttons
-//    flow together when content overflows.
+// 3. button_list present WITH upper content — i.e. is_bottom_list=true
+//    (status / confirmation screens) OR `cfg["text"]` provides intro text
+//    above the buttons: a vertical-flex body with a SEPARATE `upper_body`
+//    (LV_SIZE_CONTENT) followed by the buttons. `is_bottom_list` adds a
+//    flex-grow=1 spacer between `upper_body` and the first button so the
+//    buttons pin to the viewport bottom while content fits (collapsing on
+//    overflow); intro-text-only lists omit the spacer so the buttons flow
+//    directly under the text. When the body overflows, bind_screen_navigation
+//    auto-enables scroll-then-buttons joystick navigation (see navigation.h).
 //
 // Screens always populate `scaffold.upper_body` (or `scaffold.body` in
 // case #1, where they're the same object) and finish with
@@ -343,12 +388,20 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
         throw std::runtime_error("button_list exceeds SEEDSIGNER_SCAFFOLD_MAX_BUTTONS");
     }
 
-    // Mode 2 (legacy button list, no bottom pinning): preserve byte-identical
-    // rendering with the prior `button_list_screen` implementation by using
-    // the existing `button_list()` helper (top-aligned, manual chain-align).
-    // `upper_body` aliases `body` so any future caller can still add content
-    // — its widgets will simply share the body container with the buttons.
-    if (!is_bottom_list) {
+    // Does this button list carry intro text above the buttons? If so it needs a
+    // separate `upper_body` (the flex path below) even when not bottom-pinned, so
+    // the text can be read by scrolling and the joystick nav can hand off to the
+    // buttons. (The screen renders the text into upper_body; the scaffold only
+    // builds the structure.)
+    bool has_intro_text = cfg.contains("text") && cfg["text"].is_string() &&
+                          !cfg["text"].get<std::string>().empty();
+
+    // Mode 2 (pure button list — no bottom pinning, no intro text): preserve
+    // byte-identical rendering with the prior `button_list_screen` implementation
+    // by using the existing `button_list()` helper (top-aligned, manual
+    // chain-align). `upper_body` aliases `body`. Overflow is handled by item-focus
+    // navigation (scroll_to_view), so this path gets NO page-scroll step.
+    if (!is_bottom_list && !has_intro_text) {
         std::vector<button_list_item_t> items;
         items.reserve(button_labels.size());
         for (const auto &label : button_labels) {
@@ -372,10 +425,13 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
         return out;
     }
 
-    // Mode 3: bottom-pinned button list. Switch body to a vertical flex
+    // Modes 3 & 4: button list WITH upper content. Switch body to a vertical flex
     // column with children:
     //   [0]   upper_body (LV_SIZE_CONTENT, owned by caller)
-    //   [1]   flex-grow=1 spacer (collapses when upper_body overflows)
+    //   [1]   flex-grow=1 spacer — ONLY when is_bottom_list (Mode 3); pins the
+    //         buttons to the viewport bottom while content fits and collapses on
+    //         overflow. Intro-text-only lists (Mode 4) omit it so the buttons flow
+    //         directly under the text.
     //   [...] one button per cfg.button_list label
     //
     // Row-gap of LIST_ITEM_PADDING produces the same inter-button spacing as
@@ -397,14 +453,16 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
     lv_obj_set_flex_flow(out.upper_body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(out.upper_body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    out.button_list_spacer = lv_obj_create(out.body);
-    lv_obj_set_width(out.button_list_spacer, lv_pct(100));
-    lv_obj_set_height(out.button_list_spacer, 0);
-    lv_obj_set_flex_grow(out.button_list_spacer, 1);
-    lv_obj_set_style_bg_opa(out.button_list_spacer, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(out.button_list_spacer, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(out.button_list_spacer, 0, LV_PART_MAIN);
-    lv_obj_remove_flag(out.button_list_spacer, LV_OBJ_FLAG_SCROLLABLE);
+    if (is_bottom_list) {
+        out.button_list_spacer = lv_obj_create(out.body);
+        lv_obj_set_width(out.button_list_spacer, lv_pct(100));
+        lv_obj_set_height(out.button_list_spacer, 0);
+        lv_obj_set_flex_grow(out.button_list_spacer, 1);
+        lv_obj_set_style_bg_opa(out.button_list_spacer, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(out.button_list_spacer, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(out.button_list_spacer, 0, LV_PART_MAIN);
+        lv_obj_remove_flag(out.button_list_spacer, LV_OBJ_FLAG_SCROLLABLE);
+    }
 
     for (size_t i = 0; i < button_labels.size(); ++i) {
         // `button()`'s second arg is unused under flex layout — flex
@@ -424,49 +482,31 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
 }
 
 
-void demo_screen(void *ctx)
-{
-    (void)ctx;
-
-    json cfg = {
-        {"top_nav", {
-            {"title", "Home"},
-            {"show_back_button", false},
-            {"show_power_button", true},
-        }}
-    };
-    screen_scaffold_t screen = create_top_nav_screen_scaffold(cfg, true);
-    lv_obj_t *scr = screen.screen;
-    lv_obj_t *body_content = screen.body;
-
-    // debugging
-    // lv_obj_set_style_border_color(body_content, lv_color_hex(BUTTON_BACKGROUND_COLOR), LV_PART_MAIN);
-
-    static const button_list_item_t demo_buttons[] = {
-        { .label = "Language", .value = NULL },
-        { .label = "Persistent Settings", .value = NULL },
-        { .label = "Another option", .value = NULL },
-        { .label = "Wow so many options", .value = NULL },
-        { .label = "Continue", .value = NULL },
-    };
-    lv_obj_t* lv_seedsigner_button = button_list(body_content, demo_buttons, sizeof(demo_buttons) / sizeof(demo_buttons[0]));
-
-    lv_obj_t* lv_body_text = lv_label_create(body_content);
-    lv_obj_set_width(lv_body_text, lv_obj_get_width(body_content) - 2 * COMPONENT_PADDING);
-    lv_obj_align_to(lv_body_text, lv_seedsigner_button, LV_ALIGN_OUT_BOTTOM_LEFT, 0, COMPONENT_PADDING);
-    lv_obj_set_style_text_color(lv_body_text, lv_color_hex(BODY_FONT_COLOR), 0);
-    lv_obj_set_style_text_font(lv_body_text, &BODY_FONT, LV_PART_MAIN);
-    lv_label_set_text(lv_body_text, "Long the Paris streets, the death-carts rumble, hollow and harsh. Six tumbrils carry the day's wine to La Guillotine. All the devouring and insatiate Monsters imagined since imagination could record itself, are fused in the one realisation, Guillotine. And yet there is not in France, with its rich variety of soil and climate, a blade, a leaf, a root, a sprig, a peppercorn, which will grow to maturity under conditions more certain than those that have produced this horror. Crush humanity out of shape once more, under similar hammers, and it will twist itself into the same tortured forms. Sow the same seed of rapacious license and oppression over again, and it will surely yield the same fruit according to its kind.\n\nSix tumbrils roll along the streets. Change these back again to what they were, thou powerful enchanter, Time, and they shall be seen to be the carriages of absolute monarchs, the equipages of feudal nobles, the toilettes of flaring Jezebels, the churches that are not my Father's house but dens of thieves, the huts of millions of starving peasants! No; the great magician who majestically works out the appointed order of the Creator, never reverses his transformations. \"If thou be changed into this shape by the will of God,\" say the seers to the enchanted, in the wise Arabian stories, \"then remain so! But, if thou wear this form through mere passing conjuration, then resume thy former aspect!\" Changeless and hopeless, the tumbrils roll along.");
-
-    load_screen_and_cleanup_previous(scr);
+// Create a standard wrapped body-text label in `parent`: WRAP, fixed `width`,
+// centered, BODY_FONT in BODY_FONT_COLOR. Shared by the button_list_screen intro
+// text and the status-screen body (which then layers on its inset width, tight
+// line spacing, and centering). Caller owns any further styling.
+static lv_obj_t *make_body_text_label(lv_obj_t *parent, const char *text, int32_t width) {
+    lv_obj_t *label = lv_label_create(parent);
+    lv_label_set_text(label, text);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(label, width);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_hex(BODY_FONT_COLOR), LV_PART_MAIN);
+    lv_obj_set_style_text_font(label, &BODY_FONT, LV_PART_MAIN);
+    return label;
 }
 
 
-// Render a screen whose body is just a vertical list of buttons.
+// Render a screen whose body is a vertical list of buttons, optionally preceded
+// by an intro-text block (`cfg["text"]`).
 //
-// The scaffold builds the buttons from `cfg["button_list"]`; this function
-// only needs to validate the required key, wire navigation, and load the
-// screen.
+// The scaffold builds the buttons from `cfg["button_list"]`; when `cfg["text"]`
+// is present it also gives us a separate `upper_body` (above the buttons) for the
+// text. This function validates the required key, renders any intro text, wires
+// navigation, and loads the screen. When intro text overflows the viewport,
+// bind_screen_navigation auto-enables scroll-then-buttons joystick navigation:
+// the text scrolls into view before the first button takes focus.
 void button_list_screen(void *ctx_json)
 {
     const char *json_str = (const char *)ctx_json;
@@ -478,6 +518,18 @@ void button_list_screen(void *ctx_json)
     }
 
     screen_scaffold_t screen = create_top_nav_screen_scaffold(cfg, true);
+
+    // Optional intro text above the buttons. The scaffold gave us a separate
+    // upper_body (Mode 4) whenever cfg["text"] is a non-empty string; render the
+    // text into it. Wraps to the upper_body content width and uses the standard
+    // body font/color; line spacing is the screen's inherited default.
+    if (cfg.contains("text") && cfg["text"].is_string()) {
+        std::string text = cfg["text"].get<std::string>();
+        if (!text.empty() && screen.upper_body && screen.upper_body != screen.body) {
+            make_body_text_label(screen.upper_body, text.c_str(),
+                                 lv_obj_get_content_width(screen.upper_body));
+        }
+    }
 
     bind_screen_navigation(
         cfg,
@@ -641,6 +693,158 @@ static void add_warning_edges_overlay(lv_obj_t *screen, int status_color) {
     lv_anim_start(&pulse);
 }
 
+// ---------------------------------------------------------------------------
+// Tight, ink-based inter-line spacing.
+//
+// Walk `text` (UTF-8) and return the maximum ink ascent and descent — the tallest
+// distance above and the deepest below the baseline — over every visible glyph in
+// `font`. Whitespace and absent/inkless glyphs are skipped. Both tight_line_space
+// and text_top_leading derive their metrics from this single pass (text_top_leading
+// uses only the ascent). Either out-param may be null.
+static void measure_text_ink_extents(const lv_font_t *font, const char *text,
+                                     int32_t *out_max_ascent, int32_t *out_max_descent) {
+    int32_t max_ascent  = 0;   // ink above the baseline
+    int32_t max_descent = 0;   // ink below the baseline
+
+    // Minimal UTF-8 walk; ask the font engine for each glyph's ink box.
+    for (const unsigned char *p = (const unsigned char *)text; *p; ) {
+        uint32_t cp;
+        if (*p < 0x80) {
+            cp = *p; p += 1;
+        } else if ((*p >> 5) == 0x6 && p[1]) {
+            cp = ((uint32_t)(p[0] & 0x1F) << 6) | (p[1] & 0x3F); p += 2;
+        } else if ((*p >> 4) == 0xE && p[1] && p[2]) {
+            cp = ((uint32_t)(p[0] & 0x0F) << 12) | ((uint32_t)(p[1] & 0x3F) << 6) | (p[2] & 0x3F); p += 3;
+        } else if ((*p >> 3) == 0x1E && p[1] && p[2] && p[3]) {
+            cp = ((uint32_t)(p[0] & 0x07) << 18) | ((uint32_t)(p[1] & 0x3F) << 12) | ((uint32_t)(p[2] & 0x3F) << 6) | (p[3] & 0x3F); p += 4;
+        } else {
+            p += 1; continue;
+        }
+
+        if (cp == '\n' || cp == '\r' || cp == ' ') {
+            continue;
+        }
+
+        lv_font_glyph_dsc_t d;
+        if (!lv_font_get_glyph_dsc(font, &d, cp, 0) || d.box_h == 0) {
+            continue;   // absent or inkless (whitespace)
+        }
+
+        int32_t ascent  = (int32_t)d.ofs_y + (int32_t)d.box_h;  // top, above baseline
+        int32_t descent = -(int32_t)d.ofs_y;                    // bottom, below baseline
+        if (ascent  > max_ascent)  max_ascent  = ascent;
+        if (descent > max_descent) max_descent = descent;
+    }
+
+    if (out_max_ascent)  *out_max_ascent  = max_ascent;
+    if (out_max_descent) *out_max_descent = max_descent;
+}
+
+// LVGL's declared font line_height carries loose leading and varies wildly
+// across scripts (Arabic/Farsi fonts reserve large vertical space for stacked
+// marks), so using it as the line advance leaves multi-line body text far
+// looser than the PIL/Python reference. Instead we derive the advance from the
+// ACTUAL ink extents of the glyphs present in `text` -- the tallest ascender
+// plus the deepest descender -- and add only a small visual `gap`. The result
+// is the value to hand lv_obj_set_style_text_line_space() (the rendered advance
+// is font line_height + this), so it is usually NEGATIVE (tightening).
+//
+// Worst-case safe for a run of text: the maximum ascender (which may land on a
+// lower line) and the maximum descender (which may land on the line above it)
+// are kept at least `gap` px apart. Complex cursive scripts with a cascading
+// baseline (Urdu Nastaliq) are not well served by a single constant advance and
+// render through their own (shaped) path, not this one.
+static int32_t tight_line_space(const lv_font_t *font, const char *text, int32_t gap) {
+    if (!font || !text) {
+        return 0;
+    }
+
+    int32_t max_ascent = 0, max_descent = 0;
+    measure_text_ink_extents(font, text, &max_ascent, &max_descent);
+
+    if (max_ascent + max_descent <= 0) {
+        return 0;   // measured nothing; leave the label's default spacing alone
+    }
+
+    int32_t line_h  = (int32_t)lv_font_get_line_height(font);
+    int32_t advance = max_ascent + max_descent + gap;
+    int32_t space   = advance - line_h;
+
+    // Safety floor on how far we tighten. Per-codepoint measurement is exact for
+    // simple LTR scripts but can UNDER-count scripts whose on-screen glyphs differ
+    // from their source codepoints (Arabic/Farsi presentation-form shaping):
+    // there the measured ink is far too small and an unclamped advance would
+    // collapse the lines on top of each other. Never remove more than a quarter
+    // of the font's declared line_height — enough to strip loose leading on
+    // well-measured fonts, but a guard against collapse on the rest.
+    // NOTE: callers in large_icon_status_screen now pass lv_label_get_text() (the
+    // AP-processed presentation forms actually drawn), so fa measures correctly and
+    // no longer hits this floor — it is now insurance against future divergence,
+    // not the active correction it once was for fa.
+    int32_t min_space = -(line_h / 4);
+    if (space < min_space) {
+        space = min_space;
+    }
+    return space;
+}
+
+// Empty vertical space between a label's box top and the VISIBLE top of its text
+// — the font's ascent minus the text's real ink ascent. LVGL anchors text by the
+// font's ascent (which includes leading above the caps); PIL/Python anchors the
+// visible glyph top. Subtract this from a top margin so the visible text lands
+// where Python places it, instead of the label's (taller) box.
+int32_t text_top_leading(const lv_font_t *font, const char *text) {
+    if (!font || !text) {
+        return 0;
+    }
+    int32_t max_ascent = 0;
+    measure_text_ink_extents(font, text, &max_ascent, nullptr);
+    if (max_ascent <= 0) {
+        return 0;
+    }
+    int32_t ascent  = (int32_t)lv_font_get_line_height(font) - (int32_t)font->base_line;
+    int32_t leading = ascent - max_ascent;
+    return leading > 0 ? leading : 0;
+}
+
+// Balanced wrap for a codepoint-rendered (subset/Latin) wrapped label: shrink its
+// column to the SMALLEST width that still produces the same number of lines —
+// floored at half the original width — so greedy wrapping fills the lines more
+// evenly and a lone trailing word gets pulled up. Width-only: the line count, and
+// therefore the label's height, is unchanged, so this composes with the vertical
+// centering / reclaim done by the caller. The search is pure metric arithmetic
+// over already-loaded glyph advances (lv_text_get_size: no rasterization, no
+// re-shaping), run once at screen build — negligible cost. Shaped glyph-run
+// locales (hi/th) wrap in the render layer (glyph_runs.cpp) and are balanced
+// there instead; this path must not touch them (its codepoint measurement would
+// not match their shaped line-breaking).
+static void balance_wrapped_label_column(lv_obj_t *label) {
+    if (!label) return;
+    const char *text = lv_label_get_text(label);
+    if (!text || !text[0]) return;
+
+    const lv_font_t *font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    int32_t letter_space  = lv_obj_get_style_text_letter_space(label, LV_PART_MAIN);
+    int32_t line_space    = lv_obj_get_style_text_line_space(label, LV_PART_MAIN);
+    int32_t w0            = lv_obj_get_width(label);
+    if (!font || w0 < 2) return;
+
+    // Reuse the shared line-count binary search (balanced_wrap_width, glyph_runs.h) —
+    // the shaped path feeds it glyph-run advances; here the per-trial measure is
+    // lv_text_get_size over the codepoint text. LVGL stacks N wrapped lines to height
+    // N*(line_h + line_space) - line_space, so the visual line count is exactly
+    // (sz.y + line_space) / (line_h + line_space) — the same quantity the old height
+    // comparison used, expressed as the count the shared search expects.
+    const int32_t line_h = (int32_t)lv_font_get_line_height(font);
+    int best = balanced_wrap_width((int)w0, [&](int w, size_t *nlines, int *max_line_w) {
+        lv_point_t sz;
+        lv_text_get_size(&sz, text, font, letter_space, line_space, w, LV_TEXT_FLAG_NONE);
+        *nlines     = (size_t)((sz.y + line_space) / (line_h + line_space));
+        *max_line_w = (int)sz.x;
+    });
+    if (best < (int)w0) lv_obj_set_width(label, (int32_t)best);
+}
+
 void large_icon_status_screen(void *ctx_json) {
     const char *json_str = (const char *)ctx_json;
 
@@ -665,85 +869,151 @@ void large_icon_status_screen(void *ctx_json) {
                          lv_obj_get_width(screen.body) - 2 * EDGE_PADDING);
     }
 
-    // Allow the icon's negative top margin (below) to draw above body's top
-    // edge — Python overlaps the icon with the top_nav by COMPONENT_PADDING/2.
-    // Without OVERFLOW_VISIBLE, LVGL would clip the overflow to body's bounds.
-    // We also disable scrolling on body since these screens are sized to fit.
-    lv_obj_add_flag(screen.body, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
-    lv_obj_remove_flag(screen.body, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scrollbar_mode(screen.body, LV_SCROLLBAR_MODE_OFF);
+    // Most status screens fit the viewport and never scroll. But a tall body
+    // (long warning text on a small display) can push the bottom button off-screen,
+    // so KEEP the body scrollable (the scaffold already set scroll_dir=VER +
+    // SCROLLBAR_MODE_AUTO): touch gets native drag-to-scroll, and bind_screen_
+    // navigation auto-detects overflow to opt the joystick nav into scroll-then-
+    // button stepping. When content fits, scroll_bottom == 0 — the scrollbar stays
+    // hidden and the flow is the plain one.
+
+    // Zero upper_body's flex row-gap so the icon->headline spacing is ONLY the
+    // headline's COMPONENT_PADDING/2 top margin (matching Python's
+    // next_y = icon_bottom + COMPONENT_PADDING/2); any inherited row-gap inflates it.
+    lv_obj_set_style_pad_row(screen.upper_body, 0, LV_PART_MAIN);
 
     // Hero icon — colored, centered, sized from the active display profile.
-    // upper_body's flex layout (column, cross-axis center) handles centering.
-    // Negative top margin places the icon's top half a COMPONENT_PADDING above
-    // upper_body's top, mirroring Python's `top_nav.height - COMPONENT_PADDING/2`
-    // anchor. Requires OVERFLOW_VISIBLE on body (set above).
+    // upper_body's flex layout (column, cross-axis center) handles centering. The
+    // icon needs no margin: the body's default pad_top is 0, so the icon renders at
+    // the first available body pixel — just below the top_nav's bottom buffer — and
+    // the glyph fits its label box exactly (box_h == line_height), so it renders
+    // whole (no clip). This sits ~COMPONENT_PADDING/2 below Python's anchor
+    // (top_nav.height - COMPONENT_PADDING/2); the trade keeps the top_nav buffer
+    // visible while the body scrolls beneath it.
     lv_obj_t *icon = lv_label_create(screen.upper_body);
     lv_label_set_text(icon, defaults.icon);
     lv_obj_set_style_text_font(icon, &ICON_PRIMARY_SCREEN_FONT__SEEDSIGNER, LV_PART_MAIN);
     lv_obj_set_style_text_color(icon, lv_color_hex(defaults.color), LV_PART_MAIN);
-    lv_obj_set_style_margin_top(icon, -(COMPONENT_PADDING / 2), LV_PART_MAIN);
+    lv_obj_set_style_margin_top(icon, 0, LV_PART_MAIN);
 
-    // Strip default label padding so the bounding box matches the font's
-    // natural line_height (= cap_height for SeedSigner icons, since the icon
-    // font has base_line=0). That makes the icon's bottom edge sit exactly at
-    // the bottom of the visible glyph, mirroring Python's
-    // `Icon.height = -font.getbbox(..., anchor="ls")[1]` (cap height) and
-    // letting subsequent flex children land where Python places them.
+    // Strip default label padding so the box matches the font's line_height
+    // (cap-height; the icon font has base_line=0), so the icon's bottom edge
+    // anchors the headline spacing exactly where Python places it.
     lv_obj_set_style_pad_all(icon, 0, LV_PART_MAIN);
     lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
 
     // upper_body now spans the full screen width (body padding zeroed above).
     const int32_t upper_body_content_width = lv_obj_get_width(screen.screen);
 
-    // Optional headline — colored to match status; truncate (don't wrap) so
-    // designers know to keep it short, matching Python's auto_line_break=False.
+    // Horizontal inset for the readable text column: the body text, and an
+    // overflowing headline when it scrolls, both sit inside this gutter so they
+    // share one left/right edge and clear the pulsing warning border (warning
+    // variants double it; success uses a single EDGE_PADDING). The hero icon and
+    // a centered (fitting) headline still span the full width, matching Python.
+    const int32_t text_inset = defaults.text_edge_padding_multiplier * EDGE_PADDING;
+
+    // Optional headline — colored to match status. Single-line (never wraps),
+    // matching Python's auto_line_break=False. A headline that FITS centers on the
+    // full width and is byte-identical to before (LONG_DOT). A headline that
+    // OVERFLOWS start-justifies (LTR=left; shaped RTL via the glyph-run draw) and
+    // auto-scrolls within the text column to reveal the tail — a NEW capability
+    // (Python truncates with an ellipsis; we scroll instead). Overflow is rare
+    // (the fit test is against the full width) but long localized strings hit it.
     if (cfg.contains("status_headline") && cfg["status_headline"].is_string()) {
         std::string headline = cfg["status_headline"].get<std::string>();
         if (!headline.empty()) {
             lv_obj_t *headline_label = lv_label_create(screen.upper_body);
             lv_label_set_text(headline_label, headline.c_str());
-            lv_label_set_long_mode(headline_label, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(headline_label, upper_body_content_width);
-            lv_obj_set_style_text_align(headline_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
             lv_obj_set_style_text_color(headline_label, lv_color_hex(defaults.color), LV_PART_MAIN);
             lv_obj_set_style_text_font(headline_label, &BODY_FONT, LV_PART_MAIN);
-            lv_obj_set_style_margin_top(headline_label, COMPONENT_PADDING / 2, LV_PART_MAIN);
+
+            // Measure the rendered width like top_nav()/A11 do: the label's STORED
+            // (presentation-form) text, so the overflow test matches the painted
+            // glyphs (see label_subset_text_width). Single-line headline; shaped
+            // hi/th still mis-measure here (codepoint width) — a known low-impact gap.
+            if (label_subset_text_width(headline_label, &BODY_FONT) > upper_body_content_width &&
+                !seedsigner_locale_is_rtl()) {
+                // LTR overflow: clamp the label to the text column (so it scrolls
+                // within the same gutters as the body, never up to the screen edge
+                // or under the warning border), then start-justify (LEFT) +
+                // continuous marquee with the initial/per-wrap hold + true 40 px/sec
+                // (shared with the top_nav title). The upper_body flex centers the
+                // narrower label, yielding equal `text_inset` gutters. Shaped hi/th
+                // ride Task 0's offset-aware glyph-run draw. RTL (ur) is gated out
+                // here to match Task 0 / glyph_run_draw_cb (the offset, scroll
+                // start-justify, and content-box clip are all LTR-only for now); an
+                // overflowing ur headline keeps the legacy LONG_DOT path below, so ur
+                // stays byte-identical and its RTL scroll lands with the ur RTL track.
+                int32_t scroll_width = upper_body_content_width - 2 * text_inset;
+                if (scroll_width < 16) {
+                    scroll_width = 16;
+                }
+                lv_obj_set_width(headline_label, scroll_width);
+                lv_obj_set_style_text_align(headline_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+                label_set_line_autoscroll(headline_label, LINE_SCROLL_BEGIN_HOLD_MS, LINE_SCROLL_BEGIN_HOLD_MS);
+            } else {
+                // Fits (any locale) or RTL overflow: centered on the full width +
+                // ellipsis-capable, exactly as before (byte-identical).
+                lv_obj_set_width(headline_label, upper_body_content_width);
+                lv_label_set_long_mode(headline_label, LV_LABEL_LONG_DOT);
+                lv_obj_set_style_text_align(headline_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+            }
+            // Python's gap is CP/2 between the icon's visible bottom and the
+            // headline's VISIBLE top. The label adds top leading above the caps
+            // that PIL does not, so subtract it — otherwise the gap reads ~2x too
+            // big and cascades down, jamming the bottom button against the edge.
+            // Measure the label's STORED text, not the logical `headline`: with
+            // LV_USE_ARABIC_PERSIAN_CHARS, lv_label_set_text rewrote Arabic/Persian
+            // into presentation forms (the glyphs actually drawn, and the only ones
+            // present in the subset font). Measuring the logical codepoints
+            // under-counts the ink → an over-large leading → the fa headline pulls
+            // UP into the hero icon (the A11 collision). en is unaffected (AP is a
+            // no-op there, so the stored text == the logical text).
+            int32_t hl_lead = text_top_leading(&BODY_FONT, lv_label_get_text(headline_label));
+            lv_obj_set_style_margin_top(headline_label, COMPONENT_PADDING / 2 - hl_lead, LV_PART_MAIN);
         }
     }
 
     // Body text — wraps inside the upper_body width minus the
     // status-type-appropriate edge inset. Warning-class screens use
     // 2 * EDGE_PADDING so text never sits under the pulsing border.
+    // Hoisted to function scope so the fits-case vertical centering below can
+    // reference it after the full layout settles.
+    lv_obj_t *body_label = nullptr;
     if (cfg.contains("text") && cfg["text"].is_string()) {
         std::string text = cfg["text"].get<std::string>();
         if (!text.empty()) {
-            lv_obj_t *body_label = lv_label_create(screen.upper_body);
-            lv_label_set_text(body_label, text.c_str());
-            lv_label_set_long_mode(body_label, LV_LABEL_LONG_WRAP);
-
-            // Inset the body text by `text_edge_padding` on each side so it
-            // never sits under the pulsing warning border (warning variants
-            // double the inset; success uses a single EDGE_PADDING).
-            int32_t inset = defaults.text_edge_padding_multiplier * EDGE_PADDING;
-            int32_t text_width = upper_body_content_width - 2 * inset;
+            // Inset the body text by `text_inset` on each side (computed above,
+            // shared with the headline's scroll column) so it never sits under the
+            // pulsing warning border.
+            int32_t text_width = upper_body_content_width - 2 * text_inset;
             if (text_width < 16) {
                 text_width = 16;
             }
-            lv_obj_set_width(body_label, text_width);
 
-            lv_obj_set_style_text_align(body_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-            lv_obj_set_style_text_color(body_label, lv_color_hex(BODY_FONT_COLOR), LV_PART_MAIN);
-            lv_obj_set_style_text_font(body_label, &BODY_FONT, LV_PART_MAIN);
-            lv_obj_set_style_margin_top(body_label, COMPONENT_PADDING / 2, LV_PART_MAIN);
+            body_label = make_body_text_label(screen.upper_body, text.c_str(), text_width);
 
-            // Override the screen-level BODY_LINE_SPACING (= COMPONENT_PADDING)
-            // for body status text. That global value is tuned for paragraph
-            // text in the demo screen; on a status screen the extra spacing
-            // pushes a 3-4 line message off the bottom of the viewport. Use
-            // the font's natural line height (no extra leading) instead, which
-            // matches Python's TextArea default (line_spacing=None).
-            lv_obj_set_style_text_line_space(body_label, 0, LV_PART_MAIN);
+            // Python places the body immediately after the headline
+            // (body_top = headline_bottom; no extra gap) — so NO top margin here.
+            // A CP/2 margin (as before) made the headline->body gap visibly looser
+            // than the Python reference.
+            lv_obj_set_style_margin_top(body_label, 0, LV_PART_MAIN);
+
+            // Tight, ink-based inter-line spacing (see tight_line_space): derive
+            // the line advance from THIS text's real glyph ink extents (max
+            // ascender + max descender) plus a tiny gap, rather than the font's
+            // loose declared line_height. Matches the PIL reference and tames
+            // scripts whose font metrics over-reserve vertical space (Farsi).
+            // The gap is intentionally small and profile-scaled.
+            // As with the headline above, measure the label's STORED text so the
+            // Arabic/Persian presentation forms (what's actually drawn) are what we
+            // measure — measuring the logical codepoints under-counts the ink and
+            // pins fa to NotoSansAR's over-reserved declared line_height (too loose).
+            int32_t line_gap = LIST_ITEM_PADDING / 2;
+            lv_obj_set_style_text_line_space(
+                body_label,
+                tight_line_space(&BODY_FONT, lv_label_get_text(body_label), line_gap),
+                LV_PART_MAIN);
         }
     }
 
@@ -760,6 +1030,132 @@ void large_icon_status_screen(void *ctx_json) {
         add_warning_edges_overlay(screen.screen, defaults.color);
     }
 
+    // A13/Item1: for shaped (glyph-run) locales the body's mask is drawn TALLER than
+    // the lv_label widget box — the run lays out at the font's full line_height,
+    // while the codepoint box is sized at the tighter tight_line_space advance. Bake
+    // the runs NOW (normally deferred to the post-load pass) and GROW the body label
+    // to the run's true drawn height, so the codepoint box no longer under-reports
+    // the painted extent. Every lv_obj_get_scroll_bottom() decision below — reclaim,
+    // the fits gate, the centering, and bind_screen_navigation's scroll auto-detect —
+    // then measures the real height on ONE code path, so a tall shaped body
+    // reclaims/scrolls instead of clipping at the bottom with no scroll path. Mirror
+    // the post-load order (RTL flip, then attach); the post-load pass re-runs both as
+    // no-ops (RTL idempotent; attach skips already-attached labels). No-op for
+    // en/subset (apply_glyph_runs_to_labels self-gates on the active locale; run
+    // height returns -1 so no min-height is set).
+    //
+    // NOTE: this fix is specific to the status body, which sets a TIGHT line_space
+    // (tight_line_space, below) so its codepoint box is SHORTER than the run. Plain
+    // body labels (make_body_text_label, e.g. button_list_screen's intro text) keep
+    // the screen's generous default BODY_LINE_SPACING, so their codepoint box already
+    // meets/exceeds the run height and needs no such fix.
+    if (seedsigner_locale_uses_glyph_runs()) {
+        lv_obj_update_layout(screen.body);
+        if (seedsigner_locale_is_rtl()) {
+            apply_rtl_text_to_labels(screen.screen);
+        }
+        apply_glyph_runs_to_labels(screen.screen);
+        if (body_label) {
+            // run height is content-relative (painted from the content top), so size
+            // the box to run_h PLUS the label's vertical padding to keep the content
+            // area >= the painted run regardless of any theme padding.
+            int32_t run_h = seedsigner_label_run_drawn_height(body_label);
+            if (run_h >= 0) {
+                int32_t pad_v = lv_obj_get_style_pad_top(body_label, LV_PART_MAIN) +
+                                lv_obj_get_style_pad_bottom(body_label, LV_PART_MAIN);
+                lv_obj_set_style_min_height(body_label, run_h + pad_v, LV_PART_MAIN);
+            }
+        }
+    }
+
+    // Reclaim-only-as-needed: if the content overflows by no more than the top_nav's
+    // bottom buffer (tn_gap), pull the whole body up by exactly that overflow so it
+    // FITS without scrolling — the icon/headline/text rise a few px into the buffer
+    // region while the bottom button and its padding stay put. The body keeps its
+    // bottom edge, so only the top is reclaimed. Because we pull up by the exact
+    // overflow, the result fits (scroll_bottom -> 0) and never scrolls, so scrolled
+    // content can never collide with the nav. A larger overflow (> tn_gap can't be
+    // hidden in the buffer) is left alone: the icon stays at the default position and
+    // the screen scrolls cleanly under the full buffer (bind_screen_navigation then
+    // enables scroll-then-buttons). The two cases are mutually exclusive.
+    lv_obj_update_layout(screen.body);
+    int32_t overflow = lv_obj_get_scroll_bottom(screen.body);
+    int32_t tn_gap = (TOP_NAV_HEIGHT - TOP_NAV_BUTTON_SIZE) / 2;
+    if (overflow > 0 && overflow <= tn_gap) {
+        lv_obj_set_height(screen.body, lv_obj_get_height(screen.body) + overflow);
+        lv_obj_align_to(screen.body, screen.top_nav, LV_ALIGN_OUT_BOTTOM_MID, 0, -overflow);
+    }
+
+    // Balanced wrap: when the body fits, even out the body text's lines by
+    // narrowing its column (keeping the line count). Only the codepoint-rendered
+    // (subset/Latin) locales are handled here; shaped glyph-run locales (hi/th)
+    // wrap in the render layer and are balanced there. Done before the vertical
+    // centering below; it changes only the column width, not the height, so the
+    // centering math is unaffected.
+    //
+    // KNOWN ASYMMETRY (intentional): this subset/Latin balancing is SCOPED to this
+    // screen (called only here), while the shaped balancing in glyph_runs.cpp is
+    // GLOBAL (every wrapped shaped label, app-wide). So on a NON-status screen with
+    // wrapped body text (e.g. a button_list with intro text), shaped locales get
+    // balanced but subset/Latin ones do not. The status screen — the original
+    // motivation — is covered for all locales. If full cross-locale parity on other
+    // screens is ever needed, promote this to a global post-load pass (walk the
+    // tree, balance LONG_WRAP non-shaped labels) mirroring apply_glyph_runs_to_labels.
+    lv_obj_update_layout(screen.body);
+    bool body_fits = lv_obj_get_scroll_bottom(screen.body) == 0;
+    if (body_fits && body_label && !seedsigner_locale_uses_glyph_runs()) {
+        balance_wrapped_label_column(body_label);
+    }
+
+    // Vertically center the body text in the gap between the headline and the
+    // bottom button when the content FITS with slack to spare. By default the body
+    // text sits directly under the headline (gap 0) and the whole flex-grow spacer
+    // sits BELOW it, hard against the button — so the text reads as top-biased.
+    // Moving the text down by HALF the below-gap puts equal space above and below
+    // it; the spacer (which the shift comes out of) keeps the button pinned, so the
+    // button and its bottom padding never move. Skipped when the screen scrolls or
+    // only just fits (spacer smaller than the shift): the gate keeps it a no-op
+    // there, so reclaimed/overflowing screens are unaffected.
+    if (body_label && screen.button_list_count > 0 && screen.button_list_spacer) {
+        lv_obj_update_layout(screen.body);
+        lv_area_t text_area, button_area;
+        lv_obj_get_coords(body_label, &text_area);
+        lv_obj_get_coords(screen.button_list[0], &button_area);
+
+        // text bottom -> button top. For a shaped (glyph-run) body the run paints
+        // a different height than the codepoint label box, so use the run's true
+        // drawn bottom (content top + drawn block height); -1 => no run (en/subset
+        // locales), in which case the label box bottom is already correct. (A13)
+        int32_t text_bottom = text_area.y2;
+        int32_t run_h = seedsigner_label_run_drawn_height(body_label);
+        if (run_h >= 0) {
+            lv_area_t cc;
+            lv_obj_get_content_coords(body_label, &cc);
+            text_bottom = cc.y1 + run_h;
+        }
+        int32_t below_gap = button_area.y1 - text_bottom;
+        int32_t spacer_height = lv_obj_get_height(screen.button_list_spacer);
+
+        // Shift the body down by half the below-gap to balance the space above and
+        // below it. The shift comes out of the flex-grow spacer, so the button stays
+        // pinned — but we can never take more than the spacer holds, or the button
+        // would move. On TIGHT screens (e.g. a 3-line shaped body at 240x240) the
+        // ideal half-gap exceeds the small spacer; CLAMP to the spacer for a partial
+        // centering rather than skipping it entirely (which left the body hugging the
+        // headline — the reported hi/th symptom). (A13)
+        int32_t shift = below_gap / 2;
+        if (shift > spacer_height) {
+            shift = spacer_height;
+        }
+        if (shift > 0) {
+            lv_obj_set_style_margin_top(body_label, shift, LV_PART_MAIN);
+        }
+    }
+
+    // bind_screen_navigation auto-detects any remaining body overflow (a long
+    // warning that even a full reclaim can't fit) and enables scroll-then-buttons
+    // joystick navigation. After a successful reclaim the content fits, so nothing
+    // scrolls and the flow is the plain top-nav<->button one.
     bind_screen_navigation(
         cfg,
         screen,
@@ -1922,15 +2318,42 @@ void main_menu_screen(void *ctx_json)
 
     // Match the Python LargeButtonScreen button sizing:
     //   button_height = int((canvas_height - top_nav.height - 2*COMPONENT_PADDING - EDGE_PADDING) / 2)
-    int32_t button_w = (available_w - COMPONENT_PADDING) / 2;
     int32_t button_h = (screen_h - TOP_NAV_HEIGHT - 2 * COMPONENT_PADDING - EDGE_PADDING) / 2;
+    int32_t button_w = (available_w - COMPONENT_PADDING) / 2;
+
+    // Cap the button width to the 320x240 profile's button proportions so wider-
+    // than-4:3 displays don't stretch the 2x2 grid buttons too far. Keep the full
+    // button HEIGHT (the grid still fills the screen vertically) but limit the
+    // WIDTH to the reference aspect, then center the grid (below) so the body
+    // pillar-boxes symmetrically. The top_nav spans the full width regardless, so
+    // its power button stays pinned to the far right.
+    //
+    // Reference = the 320x240 buttons (the widest small/4:3 profile), computed from
+    // that profile's geometry. 320x240 renders at PX_MULTIPLIER_100, so these are
+    // the unscaled base constants (EDGE_PADDING=8, COMPONENT_PADDING=8,
+    // top_nav_height=48):
+    //   ref_h = (240 - 48 - 2*8 - 8) / 2          = 84
+    //   ref_w = (320 - 2*8 [body pad] - 8) / 2    = 148
+    // 240x240 (ref_w would be 108) and 320x240 (exactly 148) stay below the cap, so
+    // both are left byte-identical; only 480/800 narrow + pillar-box.
+    constexpr int32_t REF_BTN_W = 148;   // 320x240 button width
+    constexpr int32_t REF_BTN_H = 84;    // 320x240 button height
+    int32_t max_button_w = button_h * REF_BTN_W / REF_BTN_H;
+    if (button_w > max_button_w) {
+        button_w = max_button_w;
+    }
 
     // Vertically center the 2x2 grid, matching the Python LargeButtonScreen:
     //   button_start_y = top_nav_h + (canvas_h - (top_nav_h + CP) - 2*button_h - CP) / 2
     // Computed relative to the body origin (which sits at top_nav bottom).
-    int32_t grid_h = 2 * button_h + COMPONENT_PADDING;
     int32_t below_nav = screen_h - TOP_NAV_HEIGHT;
     int32_t y_offset = (below_nav - COMPONENT_PADDING - 2 * button_h - COMPONENT_PADDING) / 2;
+
+    // Horizontally center the (possibly width-capped) grid within the body so wide
+    // displays pillar-box symmetrically; x_offset is 0 when the grid fills the width.
+    int32_t grid_w = 2 * button_w + COMPONENT_PADDING;
+    int32_t x_offset = (available_w - grid_w) / 2;
+    if (x_offset < 0) x_offset = 0;
 
     lv_obj_t *buttons[4] = {NULL, NULL, NULL, NULL};
     for (uint32_t i = 0; i < 4; ++i) {
@@ -1940,28 +2363,12 @@ void main_menu_screen(void *ctx_json)
     }
 
     // first row
-    lv_obj_set_pos(
-        buttons[0],
-        0,
-        y_offset
-    );
-    lv_obj_set_pos(
-        buttons[1],
-        button_w + COMPONENT_PADDING,
-        y_offset
-    );
+    lv_obj_set_pos(buttons[0], x_offset, y_offset);
+    lv_obj_set_pos(buttons[1], x_offset + button_w + COMPONENT_PADDING, y_offset);
 
     // second row
-    lv_obj_set_pos(
-        buttons[2],
-        0,
-        y_offset + button_h + COMPONENT_PADDING
-    );
-    lv_obj_set_pos(
-        buttons[3],
-        button_w + COMPONENT_PADDING,
-        y_offset + button_h + COMPONENT_PADDING
-    );
+    lv_obj_set_pos(buttons[2], x_offset, y_offset + button_h + COMPONENT_PADDING);
+    lv_obj_set_pos(buttons[3], x_offset + button_w + COMPONENT_PADDING, y_offset + button_h + COMPONENT_PADDING);
 
     // Bind shared nav behavior using this screen's body focusables/layout.
     bind_screen_navigation(

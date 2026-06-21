@@ -19,6 +19,8 @@ typedef struct {
     size_t        body_index;
     nav_body_layout_t body_layout;
     nav_aux_policy_t  aux_policy;
+    lv_obj_t     *scroll_obj;          // NULL unless the screen opted into scrolling
+    bool          scroll_then_buttons;  // insert a NAV_ZONE_SCROLL step before the buttons
 } nav_ctx_t;
 
 
@@ -92,6 +94,76 @@ static size_t grid_move(size_t current, size_t body_count, size_t cols, uint32_t
 
 
 // ---------------------------------------------------------------------------
+// Body scroll step (joystick-driven scrolling for NAV_ZONE_SCROLL)
+//
+// Scrolls ctx->scroll_obj by one step (75% of the viewport, animated) toward the
+// requested direction, then reports whether MORE scrolling remains:
+//   true  -> there is still content to reveal; the caller stays in NAV_ZONE_SCROLL.
+//   false -> the relevant edge is within one step; the caller advances out of the
+//            scroll zone on the SAME keypress — onto the first body button (DOWN)
+//            or the top-nav back button (UP). Returning false on the exhausting
+//            step avoids a "dead" extra press at each end: the press that finishes
+//            the scroll also moves the focus.
+//
+// DOWN target — the FIRST focusable body item, not the content bottom. The point
+// of scroll-then-buttons is to read the non-focusable upper content (status text,
+// or a button list's intro text) and then hand off to item navigation. Stopping
+// at the first body item is what makes this work for a MULTI-button list under
+// intro text: scrolling all the way to scroll_bottom would skip past the first
+// buttons to the last one. Once item 0 is reached the caller focuses it and
+// update_visual_focus()'s scroll_to_view() walks the rest of the list. For a
+// single bottom-pinned button (large_icon_status_screen) item 0 sits at the very
+// bottom, so "first item in view" coincides with scrolling to the bottom — that
+// screen's behavior is unchanged.
+//
+// UP target — the top of the content; exhausting it surfaces the top-nav.
+//
+// LVGL scroll-by convention: a NEGATIVE dy reveals lower content ("scroll down").
+// LVGL clamps to the content bounds, so every step is safe; lv_obj_get_scroll_
+// top/bottom report the range above / below the current viewport.
+// ---------------------------------------------------------------------------
+
+static bool nav_scroll_step(nav_ctx_t *ctx, bool down) {
+    if (!ctx || !ctx->scroll_obj) return false;
+
+    int32_t step = (lv_obj_get_height(ctx->scroll_obj) * 3) / 4;
+    if (step < 1) step = 1;
+
+    if (!down) {
+        // Scroll up toward the top. Clamp the last step to the exact remaining
+        // range so it lands precisely at the top (no elastic over-scroll gap).
+        int32_t range = lv_obj_get_scroll_top(ctx->scroll_obj);
+        if (range <= 0) return false;   // already at the top: nothing scrolled
+        int32_t move = step < range ? step : range;
+        lv_obj_scroll_by(ctx->scroll_obj, 0, move, LV_ANIM_ON);
+        return range > step;
+    }
+
+    int32_t range = lv_obj_get_scroll_bottom(ctx->scroll_obj);
+    if (range <= 0) return false;   // already at the bottom: nothing scrolled
+
+    // How far below the viewport bottom does the first body item's top edge still
+    // sit? When that gap is within one step, the next step would reveal the item:
+    // stop scrolling and hand off, letting the caller focus item 0 and
+    // scroll_to_view() land it precisely (which also lands the lone status-screen
+    // button exactly at the bottom, no over-scroll gap).
+    int32_t needed = range;   // fallback (no items): scroll to the content bottom
+    if (ctx->body_items && ctx->body_count > 0 && ctx->body_items[0]) {
+        lv_area_t item_coords, view_coords;
+        lv_obj_get_coords(ctx->body_items[0], &item_coords);
+        lv_obj_get_coords(ctx->scroll_obj, &view_coords);
+        needed = item_coords.y1 - view_coords.y2;
+        if (needed < 0) needed = 0;   // item already in (or above) the viewport
+    }
+    if (needed <= step) return false;
+
+    int32_t move = step < range ? step : range;
+    lv_obj_scroll_by(ctx->scroll_obj, 0, -move, LV_ANIM_ON);
+    return true;
+}
+
+
+// ---------------------------------------------------------------------------
 // Visual focus management
 //
 // All visual highlight changes go through this single function.
@@ -106,8 +178,13 @@ static void update_visual_focus(nav_ctx_t *ctx) {
     if (ctx->body_items) {
         for (size_t i = 0; i < ctx->body_count; ++i) {
             if (ctx->body_items[i]) {
-                button_set_active(ctx->body_items[i],
-                    ctx->zone == NAV_ZONE_BODY && i == ctx->body_index);
+                bool focused = ctx->zone == NAV_ZONE_BODY && i == ctx->body_index;
+                button_set_active(ctx->body_items[i], focused);
+                // A focused too-wide button label marquee-scrolls; the rest clip to
+                // their start edge. Body items are out of the LVGL focus group, so
+                // LVGL never emits the FOCUSED/DEFOCUSED that would drive this — the
+                // nav layer drives it explicitly here.
+                button_set_label_marquee(ctx->body_items[i], focused);
             }
         }
         // Scroll the parent container to keep the focused body item visible.
@@ -123,7 +200,17 @@ static lv_obj_t *get_focused_item(nav_ctx_t *ctx) {
     if (ctx->zone == NAV_ZONE_TOP) {
         return ctx->top_item;  // may be NULL; caller must check
     }
-    if (ctx->body_items && ctx->body_index < ctx->body_count) {
+    // Only NAV_ZONE_BODY has a focusable item. NAV_ZONE_SCROLL is mid-scroll with
+    // nothing highlighted, so ENTER / aux-enter are no-ops there.
+    //
+    // This no-op is intentional, not a dropped keypress. In hardware nav a button
+    // must be active (focused/highlighted) before it can be selected, so while the
+    // overflowing upper content is still being scrolled the (not-yet-revealed)
+    // bottom button is deliberately unselectable. The user scrolls all the way
+    // down — which reveals the button and drops focus onto it (see the LV_KEY_DOWN
+    // handoff below) — and only then can ENTER select it. Returning NULL here keeps
+    // the "must be active before selectable" rule consistent across all screens.
+    if (ctx->zone == NAV_ZONE_BODY && ctx->body_items && ctx->body_index < ctx->body_count) {
         return ctx->body_items[ctx->body_index];
     }
     return NULL;
@@ -177,20 +264,26 @@ static void nav_key_handler(lv_event_t *e) {
     // --- Directional keys ---
 
     if (ctx->body_layout == NAV_BODY_VERTICAL) {
-        if (key == LV_KEY_UP) {
-            if (ctx->zone == NAV_ZONE_BODY) {
-                if (ctx->body_index > 0) {
-                    ctx->body_index--;
-                    update_visual_focus(ctx);
-                } else if (ctx->top_item) {
-                    // First body item: move up into top-nav.
-                    ctx->zone = NAV_ZONE_TOP;
-                    update_visual_focus(ctx);
-                }
-            }
-            return;
-        }
+        // Does this screen insert a scroll step between the top-nav and the body
+        // buttons? Only when it opted in AND there is something to scroll.
+        bool scroll_enabled = ctx->scroll_then_buttons && ctx->scroll_obj;
+
         if (key == LV_KEY_DOWN) {
+            // Scroll path: from the top-nav OR mid-scroll, each DOWN scrolls the
+            // body one step. The first DOWN already moves (no dead "enter the zone"
+            // press), and the step that reaches the bottom drops focus straight onto
+            // the first button on the SAME press.
+            if (scroll_enabled &&
+                (ctx->zone == NAV_ZONE_TOP || ctx->zone == NAV_ZONE_SCROLL)) {
+                ctx->zone = NAV_ZONE_SCROLL;
+                if (!nav_scroll_step(ctx, /*down=*/true)) {
+                    ctx->zone = NAV_ZONE_BODY;
+                    ctx->body_index = 0;
+                }
+                update_visual_focus(ctx);
+                return;
+            }
+
             if (ctx->zone == NAV_ZONE_TOP) {
                 if (ctx->body_count > 0) {
                     ctx->zone = NAV_ZONE_BODY;
@@ -200,6 +293,40 @@ static void nav_key_handler(lv_event_t *e) {
             } else if (ctx->zone == NAV_ZONE_BODY) {
                 if (ctx->body_index + 1 < ctx->body_count) {
                     ctx->body_index++;
+                    update_visual_focus(ctx);
+                }
+            }
+            return;
+        }
+
+        if (key == LV_KEY_UP) {
+            // Mid-scroll: each UP scrolls the body up one step; the step that
+            // reaches the top surfaces into the top-nav back button on the same
+            // press.
+            if (scroll_enabled && ctx->zone == NAV_ZONE_SCROLL) {
+                if (!nav_scroll_step(ctx, /*down=*/false)) {
+                    if (ctx->top_item) ctx->zone = NAV_ZONE_TOP;
+                }
+                update_visual_focus(ctx);
+                return;
+            }
+
+            if (ctx->zone == NAV_ZONE_BODY) {
+                if (ctx->body_index > 0) {
+                    ctx->body_index--;
+                    update_visual_focus(ctx);
+                } else if (scroll_enabled) {
+                    // First body button: drop back into the scroll region (now at
+                    // the bottom of the content) and scroll up immediately, so the
+                    // first UP already moves rather than just changing zones.
+                    ctx->zone = NAV_ZONE_SCROLL;
+                    if (!nav_scroll_step(ctx, /*down=*/false)) {
+                        if (ctx->top_item) ctx->zone = NAV_ZONE_TOP;
+                    }
+                    update_visual_focus(ctx);
+                } else if (ctx->top_item) {
+                    // First body item: move up into top-nav.
+                    ctx->zone = NAV_ZONE_TOP;
                     update_visual_focus(ctx);
                 }
             }
@@ -293,6 +420,8 @@ void nav_bind(const nav_config_t *cfg) {
     ctx->aux_policy  = cfg->aux_policy;
     ctx->zone        = NAV_ZONE_BODY;
     ctx->body_index  = 0;
+    ctx->scroll_obj          = cfg->scroll_obj;
+    ctx->scroll_then_buttons = cfg->scroll_then_buttons;
 
     input_mode_t mode = cfg->has_input_mode_override
         ? cfg->input_mode_override
@@ -316,6 +445,16 @@ void nav_bind(const nav_config_t *cfg) {
             ctx->zone = NAV_ZONE_BODY;
         } else if (ctx->top_item) {
             ctx->zone = NAV_ZONE_TOP;
+        }
+
+        // An overflowing scroll screen starts in the scroll region at the very top
+        // with nothing highlighted: the user reads from the beginning, the first
+        // DOWN scrolls, and the bottom button is reached only after scrolling all
+        // the way down. The back button is NOT pre-focused — an UP at the top
+        // surfaces it. (Overrides the body-button default above.)
+        if (ctx->scroll_then_buttons && ctx->scroll_obj) {
+            ctx->zone = NAV_ZONE_SCROLL;
+            lv_obj_scroll_to_y(ctx->scroll_obj, 0, LV_ANIM_OFF);
         }
 
         // Apply initial visual highlight.

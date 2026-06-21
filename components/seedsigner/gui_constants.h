@@ -9,15 +9,16 @@
  * the Pi Zero's 240px-height display, so PX_MULTIPLIER=100 is a no-op: the UI
  * renders at exactly the dimensions originally defined for that hardware.
  *
- * At 320px height (3.5" display) we use PX_MULTIPLIER=150, which scales up
- * slightly more than the direct 320/240 ratio (~1.33) would suggest. This is an
- * opinionated choice for aesthetic reasons -- elements feel better slightly larger
- * on the higher-res screen rather than just linearly scaled.
+ * At 320px height (3.5" display) we use PX_MULTIPLIER=133 — the direct 320/240
+ * ratio (4/3). This matches the geometric scaling logic that makes the 480px
+ * profile work (below). An earlier revision used 150 ("aesthetic upscale"), but
+ * that over-scaled the whole profile ~13% — fonts and layout came out too large
+ * (the keyboard font had to be hand-eased to fit its keys, a symptom of the
+ * over-scale). 133 is the correct, consistent value.
  *
- * At 480px height (4.3" display) we use PX_MULTIPLIER=200. This was chosen to
- * match the physical size of UI elements (measured with a tape measure) between
- * the 3.5" (165 DPI) and 4.3" (217 DPI) displays -- a button is ~0.29" tall on
- * both screens.
+ * At 480px height (4.3" display) we use PX_MULTIPLIER=200 — the direct 480/240
+ * ratio (2x). UI elements come out matched in physical size (measured with a tape
+ * measure) between the 3.5" (165 DPI) and 4.3" (217 DPI) displays.
  *
  * The height-to-PX_MULTIPLIER mapping lives here so it is consistent across all
  * build targets (ESP32, Pi Zero, desktop tools). Callers only need to supply
@@ -47,8 +48,23 @@
 
 // Named PX_MULTIPLIER values — one per supported display height.
 const int PX_MULTIPLIER_100 = 100;   // 240px height (Pi Zero): no scaling
-const int PX_MULTIPLIER_150 = 150;   // 320px height (3.5" ESP32): aesthetic upscale
-const int PX_MULTIPLIER_200 = 200;   // 480px height (4.3" ESP32): matched physical sizing
+const int PX_MULTIPLIER_133 = 133;   // 320px height (3.5" ESP32): direct 320/240 ratio
+const int PX_MULTIPLIER_200 = 200;   // 480px height (4.3" ESP32): direct 480/240 ratio (2x)
+
+// Auto-scroll feel for an overflowing single-line label (top-nav title; long
+// status headline). Hold the line start-justified for an initial beat so the reader
+// can absorb the start, then continuously marquee-scroll (circular wrap) at a TRUE
+// constant px/sec (the helper sets an explicit per-line duration = distance / speed,
+// not LVGL's speed encoding which caps the duration ~10 s and lets long lines run
+// fast), holding again each time it wraps back to the start. The speed matches the
+// Python (PIL) screens' horizontal_scroll_speed of 40 px/sec (smooth on a Pi Zero);
+// the circular wrap is preferred over Python's back-and-forth ping-pong, and the
+// per-loop start hold is the part of Python's feel worth keeping. Speed is px/sec at
+// the Pi Zero reference (PX_MULTIPLIER=100) and scaled for taller displays so the
+// visual speed is constant; the hold is wall-clock and does not scale.
+const int LINE_SCROLL_PX_PER_SEC    = 40;    // matches Python horizontal_scroll_speed
+const int LINE_SCROLL_BEGIN_HOLD_MS = 1000;  // initial hold + hold on each wrap to start (1 s)
+const int LINE_SCROLL_MIN_MS        = 300;   // floor on the resolved scroll duration (tiny overflows)
 
 // ---------------------------------------------------------------------------
 // Font declarations for supported display heights
@@ -65,6 +81,11 @@ LV_FONT_DECLARE(seedsigner_icons_36_4bpp);
 LV_FONT_DECLARE(inconsolata_semibold_24_4bpp);
 #endif
 
+// The "_150x" suffix is a LEGACY filename label for the 320px-height profile's
+// baked fonts; the profile now scales at PX_MULTIPLIER_133, and these fonts are
+// sized accordingly (icons 32/48/64, keyboard 32). The files keep the _150x names
+// so downstream build lists (this repo's apps + the raspi/builder submodule
+// consumers) don't need to change in lockstep.
 #ifdef SUPPORT_DISPLAY_HEIGHT_320
 LV_FONT_DECLARE(seedsigner_icons_24_4bpp_150x);
 LV_FONT_DECLARE(seedsigner_icons_36_4bpp_150x);
@@ -120,7 +141,7 @@ struct DisplayProfile {
     const lv_font_t* icon_large_button_font;
 
     // 48 px (base) seedsigner icon font, used as the hero icon on
-    // status/error screens. Scales 1.5x at 320 height, 2x at 480 height.
+    // status/error screens. Scales 1.333x at 320 height (64px), 2x at 480 (96px).
     const lv_font_t* icon_primary_screen_font;
 
     // Fixed-width font (Inconsolata SemiBold, 18 px base) for the on-screen

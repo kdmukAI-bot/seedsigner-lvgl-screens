@@ -3,6 +3,8 @@
 
 #include "lvgl.h"
 #include "src/misc/lv_text_ap.h"   // Arabic/Persian presentation-form mapper
+#include "src/widgets/label/lv_label_private.h"  // label->offset / ->text_size (no public getter)
+#include "src/misc/lv_area_private.h"             // lv_area_intersect (clip the scrolled mask)
 
 #include "stb_glyph_metrics.h"
 
@@ -14,6 +16,14 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+// Shared LONG_SCROLL_CIRCULAR marquee period (declared in glyph_runs.h): the line's
+// text width plus the LV_LABEL_WAIT_CHAR_COUNT space gap CIRCULAR inserts before the
+// wrap. Single source of truth so the scroll DURATION (label_set_line_autoscroll) and
+// the wrap-around second copy (glyph_run_draw_cb below) stay in lock-step.
+int32_t seedsigner_circular_scroll_period(const lv_font_t* font, int32_t text_width) {
+    return text_width + lv_font_get_glyph_width(font, ' ', ' ') * LV_LABEL_WAIT_CHAR_COUNT;
+}
 
 // ---------------------------------------------------------------------------
 // Parsed run-table model (filled from the compact lang-packs/<loc>/runs.bin blob
@@ -235,6 +245,37 @@ std::vector<RunLine> wrap_line(const RunLine& g, const std::vector<uint32_t>& br
 }
 
 // ---------------------------------------------------------------------------
+// Balanced wrap (shaped path). The line-count binary search itself
+// (balanced_wrap_width) now lives in glyph_runs.h, shared with the subset/Latin
+// label balance in seedsigner.cpp; here we only supply the shaped measure. The
+// shaped bake below applies it to EVERY wrapped shaped label — the only multi-line
+// wrapped text in the app today is body copy, so single-line titles/buttons (one
+// line) are untouched. NOTE: if a future screen wraps shaped text that should NOT be
+// balanced, gate it per-label (an opt-in flag threaded from the caller) rather than
+// skipping it here.
+// ---------------------------------------------------------------------------
+
+// Measure helper for the plain glyph-run path: greedy-wrap every logical
+// (\n-split) line to `width_px` and report the total visual line count + widest
+// line. Iterating entry.lines keeps intentional newlines intact.
+static void measure_wrapped_runs(const RunEntry& entry, int width_px, float scale,
+                                 uint32_t space_gid, size_t* nlines, int* max_line_w) {
+    size_t n = 0; int maxw = 0;
+    for (const RunVLine& logical : entry.lines) {
+        std::vector<RunLine> w = wrap_line(logical.glyphs, logical.breaks, width_px, scale, space_gid);
+        for (const RunLine& vl : w) {
+            long long adv = 0;
+            for (const RunGlyph& g : vl) adv += g.x_advance;
+            int lw = (int)lround((double)adv * scale);
+            if (lw > maxw) maxw = lw;
+            ++n;
+        }
+    }
+    if (nlines)     *nlines = n;
+    if (max_line_w) *max_line_w = maxw;
+}
+
+// ---------------------------------------------------------------------------
 // Bake a parsed run into an A8 alpha mask sized to the font's line box (plus a
 // generous margin to catch left bearings and cursive overhang). Resolution is
 // taken from the label's own font, so one run table serves every PX_MULTIPLIER.
@@ -259,6 +300,16 @@ LabelRun* bake_run(const RunEntry& entry, const lv_font_t* font, int px, int upe
     // marks, producing the visual lines actually laid out below. SPACE glyph id
     // from the same subset stb (to trim a trailing space at a cut).
     const uint32_t space_gid = (uint32_t)stb_metrics_glyph_index(sm, ' ');
+
+    // Balanced wrap: even out the lines by shrinking the column (see
+    // balanced_wrap_width). Width-only, keeps the line count, preserves the
+    // \n-split logical lines. wrap_width <= 0 (RTL / no-wrap) is left untouched.
+    if (wrap_width > 0) {
+        wrap_width = balanced_wrap_width(wrap_width, [&](int w, size_t* n, int* mw) {
+            measure_wrapped_runs(entry, w, scale, space_gid, n, mw);
+        });
+    }
+
     std::vector<RunLine> vlines;
     for (const RunVLine& logical : entry.lines) {
         std::vector<RunLine> w = wrap_line(logical.glyphs, logical.breaks, wrap_width, scale, space_gid);
@@ -531,6 +582,22 @@ std::vector<std::pair<size_t, size_t>> wrap_flat(const std::vector<FlatGlyph>& f
     return lines;
 }
 
+// Measure helper for the segmented path: greedy-wrap the flat glyph sequence to
+// `width_px` and report the line count + widest line (advances are already px).
+static void measure_wrapped_flat(const std::vector<FlatGlyph>& flat, int width_px,
+                                 size_t* nlines, int* max_line_w) {
+    std::vector<std::pair<size_t, size_t>> lines = wrap_flat(flat, width_px);
+    int maxw = 0;
+    for (const auto& ln : lines) {
+        double adv = 0;
+        for (size_t i = ln.first; i < ln.second; ++i) adv += flat[i].advance_px;
+        int lw = (int)lround(adv);
+        if (lw > maxw) maxw = lw;
+    }
+    if (nlines)     *nlines = lines.size();
+    if (max_line_w) *max_line_w = maxw;
+}
+
 // Match `text` (the value-filled label) against a template's literal anchors. On
 // success fills `values` (one per hole, in order) and returns true. Leftmost-greedy:
 // each literal is found at/after the previous cut. Byte-level matching is valid —
@@ -590,6 +657,14 @@ LabelRun* bake_segmented(const char* label_text, const lv_font_t* font, int px,
     const uint32_t space_gid = (uint32_t)stb_metrics_glyph_index(sm, ' ');
     std::vector<FlatGlyph> flat = flatten_segmented(*match, values, font, scale, space_gid);
     if (flat.empty()) return nullptr;
+
+    // Balanced wrap: shrink the column to even out the lines (see
+    // balanced_wrap_width); width-only, keeps the line count. Mirrors bake_run.
+    if (wrap_width > 0) {
+        wrap_width = balanced_wrap_width(wrap_width, [&](int w, size_t* n, int* mw) {
+            measure_wrapped_flat(flat, w, n, mw);
+        });
+    }
 
     // Word-wrap to the label width at the break opportunities (after spaces / part
     // edges) — long body text (e.g. the change-address warning) wraps like the
@@ -661,7 +736,38 @@ void glyph_run_draw_cb(lv_event_t* e) {
     lv_obj_get_content_coords(label, &cc);
     const int content_w = lv_area_get_width(&cc);
 
-    lv_text_align_t align = lv_obj_get_style_text_align(label, LV_PART_MAIN);
+    lv_text_align_t align     = lv_obj_get_style_text_align(label, LV_PART_MAIN);
+    const lv_label_long_mode_t long_mode = lv_label_get_long_mode(label);
+    const bool overflows      = run->layout_w > content_w;
+
+    // The scroll/marquee machinery (offset honoring, scroll-mode start-justify, the
+    // circular wrap copy, and the content-box clip) is LTR-only for now. RTL (ur)
+    // is deferred — its SCROLL_CIRCULAR title seeds offset.x at a large NEGATIVE
+    // start (-(size.x+gap), the BIDI circular start), so honoring it would push the
+    // run off-screen-left; and its button labels were never clipped. Keeping RTL on
+    // the legacy center/right path leaves ur byte-identical (see plan Item 2c, which
+    // owns the RTL start-justify + scroll framing, and project memory: ur untouched).
+    const bool ltr     = !g_table.rtl;
+    const bool scrolls = ltr && (long_mode == LV_LABEL_LONG_SCROLL ||
+                                 long_mode == LV_LABEL_LONG_SCROLL_CIRCULAR);
+
+    // A single-line label whose run overflows must show its START edge, not
+    // center-clip to its middle — the shaped counterpart of
+    // apply_button_label_layout()'s subset-path start-justify. The start edge is
+    // left for LTR, right for RTL. It applies to button labels (LONG_CLIP, both
+    // directions — legacy A2 behavior) and to the LTR scrollable modes (the top-nav
+    // title, and any future scrolling headline), where it mirrors LVGL's own
+    // draw_main forcing CENTER/RIGHT to the base-dir start on overflow (Task 0).
+    // LONG_DOT (the status headline today) and LONG_WRAP body text are intentionally
+    // excluded: DOT center-clips an overflowing run, and an unwrapped RTL body line
+    // (ur wrapping deferred) keeps its centered rendering. Labels that fit are
+    // unchanged; an explicit LEFT/RIGHT align is always honored as-is.
+    const bool start_justify =
+        overflows && (long_mode == LV_LABEL_LONG_CLIP || scrolls);
+    if (align == LV_TEXT_ALIGN_CENTER && start_justify) {
+        align = g_table.rtl ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT;
+    }
+
     int text_x;
     switch (align) {
         case LV_TEXT_ALIGN_CENTER: text_x = cc.x1 + (content_w - run->layout_w) / 2; break;
@@ -669,12 +775,21 @@ void glyph_run_draw_cb(lv_event_t* e) {
         default:                   text_x = cc.x1; break;  // LEFT / AUTO-LTR
     }
 
+    // Honor the label's scroll offset (LTR only — see above). LVGL animates
+    // label->offset.x for the SCROLL / SCROLL_CIRCULAR marquee (and offset.y for
+    // vertical scroll) and the codepoint draw path translates the text by it — but
+    // the glyph-run mask is drawn from a separate event (DRAW_MAIN_END) and
+    // previously ignored it, so a shaped marquee moved nothing. Adding the offset
+    // lets LTR shaped labels ride LVGL's existing scroll machinery (Task 0). It is 0
+    // for the fitting / static case, so non-scrolling labels are byte-identical.
+    const lv_point_t offset = ltr ? ((lv_label_t*)label)->offset : lv_point_t{0, 0};
+
     // Mask pen origin (col/row == margin) maps to (text_x, baseline); since line 0
     // baseline sits at margin+ascent inside the mask and LVGL would put it at
     // content_top+ascent, mask row 0 -> content_top - margin (margins cancel ascent).
     lv_area_t area;
-    area.x1 = text_x  - run->margin;
-    area.y1 = cc.y1   - run->margin;
+    area.x1 = text_x  - run->margin + offset.x;
+    area.y1 = cc.y1   - run->margin + offset.y;
     area.x2 = area.x1 + run->mask->header.w - 1;
     area.y2 = area.y1 + run->mask->header.h - 1;
 
@@ -684,11 +799,59 @@ void glyph_run_draw_cb(lv_event_t* e) {
     img.recolor     = lv_obj_get_style_text_color(label, LV_PART_MAIN);// live text color
     img.recolor_opa = LV_OPA_COVER;                                    // tint A8 mask fully
     img.opa         = LV_OPA_COVER;  // coverage comes from the mask, not the (suppressed) text_opa
+
+    // When an LTR run overflows a clip/scroll mode, clip the mask to the content box
+    // so the scrolled-out tail (and the wrap-around copy below) never bleed past the
+    // label's edges — matching LVGL's own SCROLL/CLIP clip. The fitting case (and
+    // all RTL) skips this so glyphs with side/vertical overshoot keep painting into
+    // the label's extended draw area exactly as before (byte-identical).
+    lv_area_t clip_ori = layer->_clip_area;
+    const bool clip_to_content = ltr && start_justify;
+    if (clip_to_content) {
+        lv_area_t clipped;
+        if (!lv_area_intersect(&clipped, &cc, &clip_ori)) return;  // nothing visible
+        layer->_clip_area = clipped;
+    }
+
     lv_draw_image(layer, &img, &area);
+
+    // SCROLL_CIRCULAR draws a second copy one period ahead so the marquee loops
+    // seamlessly: as the first copy scrolls off the start edge, the second enters
+    // from the far edge. LVGL's offset animation travels one period =
+    // text_size.x + WAIT_CHAR_COUNT spaces (codepoint metrics), so the copy is
+    // placed exactly that far along to stay in lock-step with the animation. NOTE:
+    // the shaped run width (run->layout_w) can differ from the codepoint text_size
+    // that drives the animation, so the visible inter-copy gap is the period minus
+    // the run width rather than a fixed N-space gap; perfecting shaped marquee
+    // geometry is tracked in Items 2b/2c.
+    if (scrolls && long_mode == LV_LABEL_LONG_SCROLL_CIRCULAR && overflows) {
+        const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+        const int32_t period = seedsigner_circular_scroll_period(
+            font, ((lv_label_t*)label)->text_size.x);
+        area.x1 += period;
+        area.x2 += period;
+        lv_draw_image(layer, &img, &area);
+    }
+
+    if (clip_to_content) layer->_clip_area = clip_ori;
 }
 
 void glyph_run_delete_cb(lv_event_t* e) {
     free_label_run((LabelRun*)lv_event_get_user_data(e));
+}
+
+// Return the LabelRun attached to `obj` (the user_data of its glyph_run_draw_cb
+// event), or nullptr if none. Used both to skip double-attach when a screen baked
+// its runs early, and to expose the run's drawn height to the layout.
+LabelRun* find_label_run(lv_obj_t* obj) {
+    uint32_t n = lv_obj_get_event_count(obj);
+    for (uint32_t i = 0; i < n; ++i) {
+        lv_event_dsc_t* d = lv_obj_get_event_dsc(obj, i);
+        if (d && lv_event_dsc_get_cb(d) == glyph_run_draw_cb) {
+            return (LabelRun*)lv_event_dsc_get_user_data(d);
+        }
+    }
+    return nullptr;
 }
 
 // --- Recursively attach runs to matching labels. ----------------------------
@@ -696,7 +859,9 @@ void attach_runs(lv_obj_t* obj) {
     // User text-entry stays on the codepoint path (ASCII; never shaped).
     if (lv_obj_check_type(obj, &lv_textarea_class)) return;
 
-    if (lv_obj_check_type(obj, &lv_label_class)) {
+    // Already baked (a screen front-loaded its runs so it could measure them) —
+    // don't double-attach; just recurse to children below.
+    if (lv_obj_check_type(obj, &lv_label_class) && !find_label_run(obj)) {
         // Only labels drawn with a registered shaping-locale script font are
         // candidates — this cleanly skips icon / keyboard / pure-ASCII labels.
         const lv_font_t* font = lv_obj_get_style_text_font(obj, LV_PART_MAIN);
@@ -839,4 +1004,24 @@ void seedsigner_clear_glyph_runs() {
 void apply_glyph_runs_to_labels(struct _lv_obj_t* screen) {
     if (!g_have_table || !seedsigner_locale_uses_glyph_runs() || !screen) return;
     attach_runs((lv_obj_t*)screen);
+}
+
+int32_t seedsigner_label_run_drawn_height(struct _lv_obj_t* label) {
+    if (!label) return -1;
+    LabelRun* run = find_label_run((lv_obj_t*)label);
+    if (!run || !run->mask) return -1;
+    // mask height == nlines*line_height + 2*margin (see bake_run); the block the
+    // run actually paints, from the label's content top, is nlines*line_height.
+    return (int32_t)run->mask->header.h - 2 * run->margin;
+}
+
+int seedsigner_label_run_overflows(struct _lv_obj_t* label) {
+    if (!label) return -1;
+    LabelRun* run = find_label_run((lv_obj_t*)label);
+    if (!run) return -1;
+    // Same test as glyph_run_draw_cb: the typographic block width vs the label's
+    // content box. run->layout_w is the shaped width (presentation forms / conjuncts
+    // already accounted for), which the codepoint measure can't reproduce.
+    int32_t content_w = lv_obj_get_content_width((lv_obj_t*)label);
+    return run->layout_w > content_w ? 1 : 0;
 }

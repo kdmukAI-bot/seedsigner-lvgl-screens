@@ -13,6 +13,14 @@ extern "C" {
 typedef enum {
     NAV_ZONE_TOP = 0,
     NAV_ZONE_BODY = 1,
+    // Non-focusable body content (status text, or a button list's intro text) is
+    // scrolling under joystick control. Entered automatically whenever a vertical
+    // screen has such content above its buttons and the body overflows the
+    // viewport (see nav_config_t.scroll_then_buttons): DOWN walks the body down a
+    // step at a time until the first body button is reachable, then drops into
+    // NAV_ZONE_BODY to focus it; UP reverses, finally surfacing the top-nav. No
+    // item is highlighted while in this zone.
+    NAV_ZONE_SCROLL = 2,
 } nav_zone_t;
 
 typedef enum {
@@ -43,6 +51,18 @@ typedef struct {
     size_t initial_body_index;
     bool has_input_mode_override;
     input_mode_t input_mode_override;
+
+    // Joystick scrolling (default off: scroll_obj == NULL). bind_screen_navigation
+    // turns this on automatically for any vertical screen that has non-focusable
+    // upper content (status text, a button list's intro text) above its buttons AND
+    // whose body overflows the viewport: it passes the scrollable body here with
+    // scroll_then_buttons = true, and the nav state machine inserts a
+    // NAV_ZONE_SCROLL step so DOWN scrolls the body progressively before focusing
+    // the first button, and UP scrolls back up before entering the top-nav. A pure
+    // button list (no upper content) leaves these unset: it scrolls via item-focus
+    // navigation (scroll_to_view) instead, so it must NOT get a page-scroll step.
+    lv_obj_t *scroll_obj;
+    bool scroll_then_buttons;
 } nav_config_t;
 
 void nav_bind(const nav_config_t *cfg);

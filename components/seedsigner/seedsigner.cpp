@@ -829,29 +829,20 @@ static void balance_wrapped_label_column(lv_obj_t *label) {
     int32_t w0            = lv_obj_get_width(label);
     if (!font || w0 < 2) return;
 
-    // Height at the full width fixes the target line count.
-    lv_point_t full;
-    lv_text_get_size(&full, text, font, letter_space, line_space, w0, LV_TEXT_FLAG_NONE);
-    // A single line has nothing to balance.
-    if (full.y <= (int32_t)lv_font_get_line_height(font)) return;
-
-    // Binary-search the narrowest width in [w0/2, w0] whose wrapped height is
-    // unchanged (same line count) AND that still contains every word (size.x must
-    // not exceed the trial width, else a word would overflow the column).
-    int32_t lo = w0 / 2, hi = w0, best = w0;
-    if (lo < 1) lo = 1;
-    while (lo <= hi) {
-        int32_t mid = (lo + hi) / 2;
+    // Reuse the shared line-count binary search (balanced_wrap_width, glyph_runs.h) —
+    // the shaped path feeds it glyph-run advances; here the per-trial measure is
+    // lv_text_get_size over the codepoint text. LVGL stacks N wrapped lines to height
+    // N*(line_h + line_space) - line_space, so the visual line count is exactly
+    // (sz.y + line_space) / (line_h + line_space) — the same quantity the old height
+    // comparison used, expressed as the count the shared search expects.
+    const int32_t line_h = (int32_t)lv_font_get_line_height(font);
+    int best = balanced_wrap_width((int)w0, [&](int w, size_t *nlines, int *max_line_w) {
         lv_point_t sz;
-        lv_text_get_size(&sz, text, font, letter_space, line_space, mid, LV_TEXT_FLAG_NONE);
-        if (sz.y <= full.y && sz.x <= mid) {
-            best = mid;      // still the same lines, no overflow: try narrower
-            hi = mid - 1;
-        } else {
-            lo = mid + 1;    // added a line or overflowed a word: widen
-        }
-    }
-    if (best < w0) lv_obj_set_width(label, best);
+        lv_text_get_size(&sz, text, font, letter_space, line_space, w, LV_TEXT_FLAG_NONE);
+        *nlines     = (size_t)((sz.y + line_space) / (line_h + line_space));
+        *max_line_w = (int)sz.x;
+    });
+    if (best < (int)w0) lv_obj_set_width(label, (int32_t)best);
 }
 
 void large_icon_status_screen(void *ctx_json) {
@@ -937,13 +928,11 @@ void large_icon_status_screen(void *ctx_json) {
             lv_obj_set_style_text_font(headline_label, &BODY_FONT, LV_PART_MAIN);
 
             // Measure the rendered width like top_nav()/A11 do: the label's STORED
-            // text (Arabic/Persian presentation forms, what's actually drawn), NOT
-            // the logical string, so the overflow test matches the painted glyphs.
-            lv_point_t hl_size = {0, 0};
-            lv_text_get_size(&hl_size, lv_label_get_text(headline_label), &BODY_FONT,
-                             0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-
-            if (hl_size.x > upper_body_content_width && !seedsigner_locale_is_rtl()) {
+            // (presentation-form) text, so the overflow test matches the painted
+            // glyphs (see label_subset_text_width). Single-line headline; shaped
+            // hi/th still mis-measure here (codepoint width) — a known low-impact gap.
+            if (label_subset_text_width(headline_label, &BODY_FONT) > upper_body_content_width &&
+                !seedsigner_locale_is_rtl()) {
                 // LTR overflow: clamp the label to the text column (so it scrolls
                 // within the same gutters as the body, never up to the screen edge
                 // or under the warning border), then start-justify (LEFT) +
@@ -1054,6 +1043,12 @@ void large_icon_status_screen(void *ctx_json) {
     // no-ops (RTL idempotent; attach skips already-attached labels). No-op for
     // en/subset (apply_glyph_runs_to_labels self-gates on the active locale; run
     // height returns -1 so no min-height is set).
+    //
+    // NOTE: this fix is specific to the status body, which sets a TIGHT line_space
+    // (tight_line_space, below) so its codepoint box is SHORTER than the run. Plain
+    // body labels (make_body_text_label, e.g. button_list_screen's intro text) keep
+    // the screen's generous default BODY_LINE_SPACING, so their codepoint box already
+    // meets/exceeds the run height and needs no such fix.
     if (seedsigner_locale_uses_glyph_runs()) {
         lv_obj_update_layout(screen.body);
         if (seedsigner_locale_is_rtl()) {

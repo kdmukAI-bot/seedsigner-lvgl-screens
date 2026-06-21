@@ -202,6 +202,14 @@ static lv_obj_t *get_focused_item(nav_ctx_t *ctx) {
     }
     // Only NAV_ZONE_BODY has a focusable item. NAV_ZONE_SCROLL is mid-scroll with
     // nothing highlighted, so ENTER / aux-enter are no-ops there.
+    //
+    // This no-op is intentional, not a dropped keypress. In hardware nav a button
+    // must be active (focused/highlighted) before it can be selected, so while the
+    // overflowing upper content is still being scrolled the (not-yet-revealed)
+    // bottom button is deliberately unselectable. The user scrolls all the way
+    // down — which reveals the button and drops focus onto it (see the LV_KEY_DOWN
+    // handoff below) — and only then can ENTER select it. Returning NULL here keeps
+    // the "must be active before selectable" rule consistent across all screens.
     if (ctx->zone == NAV_ZONE_BODY && ctx->body_items && ctx->body_index < ctx->body_count) {
         return ctx->body_items[ctx->body_index];
     }

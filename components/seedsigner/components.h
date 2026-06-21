@@ -22,6 +22,16 @@ lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button,
 // (Task 0); RTL (ur) is excluded there for now.
 void label_set_line_autoscroll(lv_obj_t* label, uint32_t begin_hold_ms, uint32_t loop_hold_ms);
 
+// Width (px) of a label's STORED text at `font`: lv_text_get_size over
+// lv_label_get_text(label) with letter/line space 0 and unconstrained width. Callers
+// compare it against an available width to detect overflow. Measures the STORED text,
+// NOT the original argument — with LV_USE_ARABIC_PERSIAN_CHARS, lv_label_set_text
+// rewrites Arabic/Persian into (narrower) presentation forms and the subset fonts carry
+// those forms, so measuring the logical string over-counts and falsely trips overflow.
+// NOT valid for shaped (glyph-run) labels (the codepoint measure mis-counts conjuncts /
+// presentation forms) — use seedsigner_label_run_overflows() for those.
+int32_t label_subset_text_width(lv_obj_t* label, const lv_font_t* font);
+
 typedef struct {
     const char *label;
     void *value;

@@ -32,6 +32,47 @@
 #include <cstdint>
 
 struct _lv_obj_t;
+struct _lv_font_t;
+
+// The pixel "period" LVGL's LONG_SCROLL_CIRCULAR marquee travels per loop: the
+// line's typographic width plus the LV_LABEL_WAIT_CHAR_COUNT space gap CIRCULAR
+// inserts before it wraps. Two consumers MUST agree on this value or the marquee
+// desyncs: label_set_line_autoscroll sizes the scroll DURATION from it, and the
+// glyph-run draw places the wrap-around second copy exactly one period ahead. Pass
+// the line's text width (the codepoint text_size.x the animation is driven by);
+// the helper adds the WAIT_CHAR gap for the label's font.
+int32_t seedsigner_circular_scroll_period(const struct _lv_font_t* font, int32_t text_width);
+
+// Balanced text wrap: narrow a wrapped label's column to the SMALLEST width that still
+// produces the same number of visual lines (floored at half the full width), so greedy
+// wrapping fills the lines evenly and a lone trailing word is pulled up. Width-only —
+// the line count, and thus the label/mask height, is unchanged — so it composes with
+// any vertical centering the caller does. A binary search of pure metric passes (no
+// rasterization / re-shaping), run once per label.
+//
+// Shared by both wrap paths: the shaped glyph-run bake (glyph_runs.cpp, measuring
+// shaped advances) and the subset/Latin label balance (seedsigner.cpp, measuring
+// lv_text_get_size). `measure(width, &nlines, &max_line_w)` reports, for a trial width,
+// the visual line count and the widest resulting line; a width is acceptable only if it
+// keeps the line count AND no line exceeds it (no word forced to overflow the column).
+template <typename MeasureFn>
+inline int balanced_wrap_width(int full_width, MeasureFn measure) {
+    if (full_width <= 1) return full_width;
+    size_t n0 = 0; int maxw0 = 0;
+    measure(full_width, &n0, &maxw0);
+    if (n0 < 2) return full_width;   // single line: nothing to balance
+
+    int lo = full_width / 2, hi = full_width, best = full_width;
+    if (lo < 1) lo = 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        size_t n = 0; int mw = 0;
+        measure(mid, &n, &mw);
+        if (n <= n0 && mw <= mid) { best = mid; hi = mid - 1; }  // same lines, fits: narrower
+        else                      { lo = mid + 1; }              // extra line / overflow: wider
+    }
+    return best;
+}
 
 // Install (or replace) the active locale's pre-shaped run table from runs.bin
 // (SSRB) bytes. Pass nullptr/0 to clear. Returns true on parse success (false on a

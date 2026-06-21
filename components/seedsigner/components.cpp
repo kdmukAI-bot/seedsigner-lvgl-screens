@@ -104,6 +104,16 @@ static lv_obj_t* top_nav_icon_button(lv_obj_t* lv_parent, const char* icon, lv_a
     return btn;
 }
 
+// See components.h: width of a label's STORED (presentation-form) text at `font`.
+// The single home for the exact lv_text_get_size args every overflow check uses, so
+// the "measure the stored text, not the logical argument" convention can't drift.
+int32_t label_subset_text_width(lv_obj_t* label, const lv_font_t* font) {
+    lv_point_t size = {0, 0};
+    lv_text_get_size(&size, lv_label_get_text(label), font, 0, 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    return size.x;
+}
+
 // Configure an already start-justified, width-constrained single-line label to
 // auto-scroll its overflowing text: optionally hold start-justified for an initial
 // beat (`begin_hold_ms`, so the reader absorbs the screen + the start of the line),
@@ -154,18 +164,25 @@ void label_set_line_autoscroll(lv_obj_t* label, uint32_t begin_hold_ms, uint32_t
     lv_text_get_size(&line_size, lv_label_get_text(label), font,
                      lv_obj_get_style_text_letter_space(label, LV_PART_MAIN), 0,
                      LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    int32_t scroll_distance = line_size.x +
-        lv_font_get_glyph_width(font, ' ', ' ') * LV_LABEL_WAIT_CHAR_COUNT;
+    int32_t scroll_distance = seedsigner_circular_scroll_period(font, line_size.x);
     uint32_t duration_ms = (uint32_t)((int64_t)scroll_distance * 1000 / px_per_sec);
     if (duration_ms < (uint32_t)LINE_SCROLL_MIN_MS) {
         duration_ms = (uint32_t)LINE_SCROLL_MIN_MS;
     }
     lv_obj_set_style_anim_duration(label, duration_ms, LV_PART_MAIN);
 
-    // The template is a function-local static, but it carries the CALLER's holds
-    // (titles vs touch use different values), so it must be re-initialized each call —
-    // the label copies the fields out immediately (it never retains the pointer), so
-    // overwriting the shared instance per call is safe.
+    // Per-wrap "feel": the initial + per-loop holds, applied via a style anim
+    // TEMPLATE. CAUTION: lv_obj_set_style_anim keeps only a POINTER to this template
+    // and reads it LAZILY at the (deferred) lv_label_refr_text — it does NOT copy the
+    // fields out here. So this one function-local static is shared by every
+    // autoscrolling label, and overwriting it between a set() and that label's deferred
+    // refresh would hand the earlier label the LATER caller's holds. That is safe today
+    // only because the holds never actually differ before a refresh: every build-time
+    // caller (title, headline) passes the same LINE_SCROLL_BEGIN_HOLD_MS, and the one
+    // caller that passes begin_hold=0 (the touch long-press) fires from a user gesture
+    // long after the build-time labels have refreshed. If a future caller sets a
+    // DIFFERENT hold on a second label during the SAME build, give it its own template
+    // instance (or a per-label static) rather than reusing this shared one.
     static lv_anim_t scroll_feel_template;
     lv_anim_init(&scroll_feel_template);
     lv_anim_set_delay(&scroll_feel_template, begin_hold_ms);   // act_time = -begin hold (0 = none)
@@ -247,10 +264,9 @@ lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button,
     // their layout is unchanged. Width is direction-independent, so measuring before
     // the RTL base_dir post-pass is fine.
     const lv_font_t *eff_font = title_font ? title_font : &TOP_NAV_TITLE_FONT;
-    lv_point_t text_size = {0, 0};
-    lv_text_get_size(&text_size, lv_label_get_text(label), eff_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int32_t title_w = label_subset_text_width(label, eff_font);
 
-    if (text_size.x > label_w) {
+    if (title_w > label_w) {
         // Overflow case: clip + scroll within the region between the buttons. The
         // title starts start-justified (left here; shaped RTL via the glyph-run draw)
         // then continuously marquee-scrolls with an initial hold + a hold each time it
@@ -267,12 +283,12 @@ lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button,
         // in-between case where the title is too short to scroll yet long enough
         // to intrude given the asymmetric button padding — fall back to centering
         // it within the available region between the buttons so it never overlaps.
-        int32_t centered_left = (nav_w - text_size.x) / 2;
+        int32_t centered_left = (nav_w - title_w) / 2;
         bool full_center_safe = (centered_left >= left_pad) &&
-                                (centered_left + text_size.x <= nav_w - right_pad);
+                                (centered_left + title_w <= nav_w - right_pad);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
         if (full_center_safe) {
-            lv_obj_set_width(label, text_size.x);
+            lv_obj_set_width(label, title_w);
             lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
         } else {
             lv_obj_set_width(label, label_w);
@@ -388,10 +404,7 @@ static bool button_label_overflows(lv_obj_t* label) {
     }
 
     const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
-    lv_point_t text_size = {0, 0};
-    lv_text_get_size(&text_size, lv_label_get_text(label), font, 0, 0,
-                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    return text_size.x > content_w;
+    return label_subset_text_width(label, font) > content_w;
 }
 
 // Start a button's text label scrolling for a touch long-press. Returns true only if a
@@ -633,10 +646,7 @@ static void apply_button_label_layout(lv_obj_t* btn) {
         // trip overflow (same rationale as top_nav()'s A4 fix). Width is
         // direction-independent.
         const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
-        lv_point_t text_size = {0, 0};
-        lv_text_get_size(&text_size, lv_label_get_text(label), font, 0, 0,
-                         LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        if (text_size.x > available_w) {
+        if (label_subset_text_width(label, font) > available_w) {
             align = seedsigner_locale_is_rtl() ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT;
         }
     }

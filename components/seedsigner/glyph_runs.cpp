@@ -17,6 +17,14 @@
 #include <unordered_map>
 #include <vector>
 
+// Shared LONG_SCROLL_CIRCULAR marquee period (declared in glyph_runs.h): the line's
+// text width plus the LV_LABEL_WAIT_CHAR_COUNT space gap CIRCULAR inserts before the
+// wrap. Single source of truth so the scroll DURATION (label_set_line_autoscroll) and
+// the wrap-around second copy (glyph_run_draw_cb below) stay in lock-step.
+int32_t seedsigner_circular_scroll_period(const lv_font_t* font, int32_t text_width) {
+    return text_width + lv_font_get_glyph_width(font, ' ', ' ') * LV_LABEL_WAIT_CHAR_COUNT;
+}
+
 // ---------------------------------------------------------------------------
 // Parsed run-table model (filled from the compact lang-packs/<loc>/runs.bin blob
 // — see the SSRB format in tools/i18n/runs_bin.py, which the BinReader below
@@ -237,42 +245,15 @@ std::vector<RunLine> wrap_line(const RunLine& g, const std::vector<uint32_t>& br
 }
 
 // ---------------------------------------------------------------------------
-// Balanced wrap (shaped path). Narrow a label's wrap column to the SMALLEST width
-// that still produces the same number of visual lines — floored at half the full
-// width — so greedy wrapping fills the lines evenly and a lone trailing word is
-// pulled up. Width-only: the line count (and therefore the baked mask height) is
-// unchanged. Cost is trivial: a binary search of a handful of pure-arithmetic
-// passes over the already-shaped advances + offline ICU break marks (no
-// rasterization, no re-shaping), once per label bake.
-//
-// Applied to EVERY wrapped shaped label (in bake_run / bake_segmented below). The
-// only multi-line wrapped text in the app today is body copy, so in practice this
-// only balances body text; single-line labels (titles, buttons) have one line and
-// are left untouched. NOTE: if a future screen wraps shaped text that should NOT
-// be balanced, gate this per-label (e.g. an opt-in flag threaded from the caller)
-// rather than skipping it here.
-//
-// `measure(width, &nlines, &max_line_w)` reports, for a trial width, the visual
-// line count and the widest resulting line; a width is acceptable only if it keeps
-// the line count AND no line exceeds it (no word forced to overflow the column).
-template <typename MeasureFn>
-static int balanced_wrap_width(int full_width, MeasureFn measure) {
-    if (full_width <= 1) return full_width;
-    size_t n0 = 0; int maxw0 = 0;
-    measure(full_width, &n0, &maxw0);
-    if (n0 < 2) return full_width;   // single line: nothing to balance
-
-    int lo = full_width / 2, hi = full_width, best = full_width;
-    if (lo < 1) lo = 1;
-    while (lo <= hi) {
-        int mid = (lo + hi) / 2;
-        size_t n = 0; int mw = 0;
-        measure(mid, &n, &mw);
-        if (n <= n0 && mw <= mid) { best = mid; hi = mid - 1; }  // same lines, fits: narrower
-        else                      { lo = mid + 1; }              // extra line / overflow: wider
-    }
-    return best;
-}
+// Balanced wrap (shaped path). The line-count binary search itself
+// (balanced_wrap_width) now lives in glyph_runs.h, shared with the subset/Latin
+// label balance in seedsigner.cpp; here we only supply the shaped measure. The
+// shaped bake below applies it to EVERY wrapped shaped label — the only multi-line
+// wrapped text in the app today is body copy, so single-line titles/buttons (one
+// line) are untouched. NOTE: if a future screen wraps shaped text that should NOT be
+// balanced, gate it per-label (an opt-in flag threaded from the caller) rather than
+// skipping it here.
+// ---------------------------------------------------------------------------
 
 // Measure helper for the plain glyph-run path: greedy-wrap every logical
 // (\n-split) line to `width_px` and report the total visual line count + widest
@@ -845,8 +826,8 @@ void glyph_run_draw_cb(lv_event_t* e) {
     // geometry is tracked in Items 2b/2c.
     if (scrolls && long_mode == LV_LABEL_LONG_SCROLL_CIRCULAR && overflows) {
         const lv_font_t* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
-        const int32_t period = ((lv_label_t*)label)->text_size.x +
-                               lv_font_get_glyph_width(font, ' ', ' ') * LV_LABEL_WAIT_CHAR_COUNT;
+        const int32_t period = seedsigner_circular_scroll_period(
+            font, ((lv_label_t*)label)->text_size.x);
         area.x1 += period;
         area.x2 += period;
         lv_draw_image(layer, &img, &area);

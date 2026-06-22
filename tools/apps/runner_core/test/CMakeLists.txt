@@ -58,9 +58,30 @@ if(SUPPORT_DISPLAY_HEIGHT_480)
     "${SEEDSIGNER_DIR}/fonts/inconsolata_semibold_24_4bpp_200x.c")
 endif()
 
+# Baked logo + HRF partner-logo assets, gated per display height (mirrors the
+# font blocks above). seedsigner.cpp references both selectors, so both the logo
+# and HRF variants for each compiled-in height must link.
+set(SEEDSIGNER_IMAGE_SOURCES "")
+if(SUPPORT_DISPLAY_HEIGHT_240)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img.c")
+endif()
+if(SUPPORT_DISPLAY_HEIGHT_320)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img_133x.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img_133x.c")
+endif()
+if(SUPPORT_DISPLAY_HEIGHT_480)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img_200x.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img_200x.c")
+endif()
+
 add_executable(test_runner_core
   ${LVGL_SOURCES}
   ${SEEDSIGNER_FONT_SOURCES}
+  ${SEEDSIGNER_IMAGE_SOURCES}
   "${SEEDSIGNER_DIR}/gui_constants.cpp"
   "${SEEDSIGNER_DIR}/locale_fonts.cpp"
   "${SEEDSIGNER_DIR}/font_registry.cpp"
@@ -68,7 +89,6 @@ add_executable(test_runner_core
   "${SEEDSIGNER_DIR}/input_profile.cpp"
   "${SEEDSIGNER_DIR}/navigation.cpp"
   "${SEEDSIGNER_DIR}/seedsigner.cpp"
-  "${SEEDSIGNER_DIR}/images/seedsigner_logo_img.c"
   "${COMMON_DIR}/runner_core.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/test_runner_core.cpp")
 

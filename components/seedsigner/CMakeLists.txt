@@ -38,7 +38,18 @@ list(APPEND srcs
     "components.cpp"
     "input_profile.cpp"
     "navigation.cpp"
+    # Baked RGB565 logo + HRF partner-logo assets, one per display-height profile
+    # (selected at runtime by px_multiplier). Listed flat here like the fonts
+    # above; the firmware build drops the unused-resolution variants at link via
+    # --gc-sections (the #ifdef-gated declarations/selector leave them
+    # unreferenced). A single-resolution firmware can also gate these via cache
+    # vars — coordinated with the builder (see opening-splash plan, Part 2).
     "images/seedsigner_logo_img.c"
+    "images/seedsigner_logo_img_133x.c"
+    "images/seedsigner_logo_img_200x.c"
+    "images/hrf_logo_img.c"
+    "images/hrf_logo_img_133x.c"
+    "images/hrf_logo_img_200x.c"
 )
 
 

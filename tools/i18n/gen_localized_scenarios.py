@@ -25,37 +25,25 @@ from po_catalog import parse_catalog
 # This file lives at tools/i18n/; repo root is two levels up.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-# Keys whose string value is display text. Everything else (status_type,
-# is_bottom_list, name, initial_text/initial_mode, show_* booleans) is left as-is.
-TRANSLATABLE_STRING_KEYS = {"title", "text", "status_headline"}
-# Keys whose value is a list of display labels (strings, or [label, ...] tuples).
-TRANSLATABLE_LIST_KEYS = {"button_list"}
-
-
-def _translate_label(label, catalog):
-    if isinstance(label, str):
-        return catalog.get(label, label)
-    # Button entries may be [label, icon, ...]; translate the label only.
-    if isinstance(label, list) and label and isinstance(label[0], str):
-        out = list(label)
-        out[0] = catalog.get(label[0], label[0])
-        return out
-    return label
-
-
 def localize(node, catalog):
-    """Recursively translate display-text leaves in place."""
+    """Recursively translate display-text leaves by CONTENT, not by key name.
+
+    Any string whose exact value is a catalog msgid is replaced with its
+    translation; every other string (structural ids, status_type, scenario
+    names, synthetic stress text, passphrase input, icon names, version) is not a
+    msgid and so passes through unchanged. Matching on content rather than an
+    allowlist of keys means a new translatable field (e.g. the splash sponsor
+    line, or a button [label, icon] tuple's label) needs no upkeep here — if its
+    English text is in the catalog, it translates.
+    """
     if isinstance(node, dict):
         for key, value in node.items():
-            if key in TRANSLATABLE_STRING_KEYS and isinstance(value, str):
-                node[key] = catalog.get(value, value)
-            elif key in TRANSLATABLE_LIST_KEYS and isinstance(value, list):
-                node[key] = [_translate_label(e, catalog) for e in value]
-            else:
-                localize(value, catalog)
-    elif isinstance(node, list):
-        for item in node:
-            localize(item, catalog)
+            node[key] = localize(value, catalog)
+        return node
+    if isinstance(node, list):
+        return [localize(item, catalog) for item in node]
+    if isinstance(node, str):
+        return catalog.get(node, node)
     return node
 
 

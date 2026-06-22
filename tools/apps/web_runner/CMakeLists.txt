@@ -81,6 +81,25 @@ if(SUPPORT_DISPLAY_HEIGHT_480)
     "${SEEDSIGNER_DIR}/fonts/inconsolata_semibold_24_4bpp_200x.c")
 endif()
 
+# Baked logo + HRF partner-logo assets, gated per display height (mirrors the
+# font blocks above). Runtime selectors pick the px_multiplier-matched variant.
+set(SEEDSIGNER_IMAGE_SOURCES "")
+if(SUPPORT_DISPLAY_HEIGHT_240)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img.c")
+endif()
+if(SUPPORT_DISPLAY_HEIGHT_320)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img_133x.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img_133x.c")
+endif()
+if(SUPPORT_DISPLAY_HEIGHT_480)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img_200x.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img_200x.c")
+endif()
+
 set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/gui_constants.cpp"
   "${SEEDSIGNER_DIR}/components.cpp"
@@ -95,8 +114,7 @@ set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/locale_loader.cpp"
   # Complex-script (Devanagari/Thai/Nastaliq) glyph-run render layer.
   "${SEEDSIGNER_DIR}/glyph_runs.cpp"
-  "${SEEDSIGNER_DIR}/stb_glyph_metrics.c"
-  "${SEEDSIGNER_DIR}/images/seedsigner_logo_img.c")
+  "${SEEDSIGNER_DIR}/stb_glyph_metrics.c")
 
 set(RUNNER_COMMON_SOURCES
   "${COMMON_DIR}/runner_core.cpp"
@@ -111,6 +129,7 @@ set(RUNNER_COMMON_SOURCES
 add_executable(web_runner
   ${LVGL_SOURCES}
   ${SEEDSIGNER_FONT_SOURCES}
+  ${SEEDSIGNER_IMAGE_SOURCES}
   ${SEEDSIGNER_CORE_SOURCES}
   ${RUNNER_COMMON_SOURCES}
   "${CMAKE_CURRENT_LIST_DIR}/web_runner.cpp")

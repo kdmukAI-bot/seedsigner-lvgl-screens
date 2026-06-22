@@ -92,6 +92,20 @@
     ]
   },
   "screensaver_screen": {},
+  "splash_screen": {
+    "context": {
+      "version": "v0.8.7",
+      "show_partner_logos": true,
+      "sponsor_text": "With support from:",
+      "logo_already_shown": false
+    },
+    "variations": [
+      { "name": "boot_logo", "context": { "boot_logo_only": true } },
+      { "name": "cpython_no_partners", "context": { "show_partner_logos": false } },
+      { "name": "micropython_partners", "context": { "logo_already_shown": true } },
+      { "name": "micropython_no_partners", "context": { "logo_already_shown": true, "show_partner_logos": false } }
+    ]
+  },
   "large_icon_status_screen": {
     "context": {
       "top_nav": { "title": "Backup Verified", "show_back_button": false, "show_power_button": false },

@@ -98,9 +98,25 @@ if(SUPPORT_DISPLAY_HEIGHT_480)
     )
 endif()
 
-set(SEEDSIGNER_IMAGE_SOURCES
-  "${SEEDSIGNER_DIR}/images/seedsigner_logo_img.c"
-)
+# Baked logo + HRF partner-logo assets, gated per display height (mirrors the
+# font blocks above). The runtime selectors (seedsigner_logo_for_active_profile)
+# pick the variant matching the active profile's px_multiplier.
+set(SEEDSIGNER_IMAGE_SOURCES "")
+if(SUPPORT_DISPLAY_HEIGHT_240)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img.c")
+endif()
+if(SUPPORT_DISPLAY_HEIGHT_320)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img_133x.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img_133x.c")
+endif()
+if(SUPPORT_DISPLAY_HEIGHT_480)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img_200x.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img_200x.c")
+endif()
 
 set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/gui_constants.cpp"

@@ -72,7 +72,7 @@ static std::map<std::string, std::vector<uint8_t>> g_staged_blobs;
 extern "C" void seedsigner_lvgl_on_button_selected(uint32_t index, const char* label) {
     const char* kind = "body";
     if (index == SEEDSIGNER_RET_BACK_BUTTON || index == SEEDSIGNER_RET_POWER_BUTTON ||
-        index == SEEDSIGNER_RET_SCREENSAVER_DISMISS) {
+        index == SEEDSIGNER_RET_SCREENSAVER_DISMISS || index == SEEDSIGNER_RET_SPLASH_COMPLETE) {
         kind = "reserved";
     }
     EM_ASM({

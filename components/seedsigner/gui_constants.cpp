@@ -199,6 +199,42 @@ DisplayProfile& active_profile_mutable() {
 }
 
 // ---------------------------------------------------------------------------
+// Baked image selection by multiplier — same shape as fonts_for_multiplier().
+// Each branch is #ifdef-gated in lockstep with the LV_IMAGE_DECLAREs in
+// gui_constants.h and the CMake source lists, so a single-height build contains
+// (and references) only its own variant.
+// ---------------------------------------------------------------------------
+const lv_image_dsc_t* seedsigner_logo_for_active_profile() {
+    const int px_mult = active_profile().px_multiplier;
+#ifdef SUPPORT_DISPLAY_HEIGHT_480
+    if (px_mult == PX_MULTIPLIER_200) return &seedsigner_logo_img_200x;
+#endif
+#ifdef SUPPORT_DISPLAY_HEIGHT_320
+    if (px_mult == PX_MULTIPLIER_133) return &seedsigner_logo_img_133x;  // 320px-height profile (base x 320/240)
+#endif
+#ifdef SUPPORT_DISPLAY_HEIGHT_240
+    if (px_mult == PX_MULTIPLIER_100) return &seedsigner_logo_img;
+#endif
+    fprintf(stderr, "FATAL: no seedsigner logo for PX_MULTIPLIER=%d\n", px_mult);
+    abort();
+}
+
+const lv_image_dsc_t* hrf_logo_for_active_profile() {
+    const int px_mult = active_profile().px_multiplier;
+#ifdef SUPPORT_DISPLAY_HEIGHT_480
+    if (px_mult == PX_MULTIPLIER_200) return &hrf_logo_img_200x;
+#endif
+#ifdef SUPPORT_DISPLAY_HEIGHT_320
+    if (px_mult == PX_MULTIPLIER_133) return &hrf_logo_img_133x;  // 320px-height profile (base x 320/240)
+#endif
+#ifdef SUPPORT_DISPLAY_HEIGHT_240
+    if (px_mult == PX_MULTIPLIER_100) return &hrf_logo_img;
+#endif
+    fprintf(stderr, "FATAL: no HRF logo for PX_MULTIPLIER=%d\n", px_mult);
+    abort();
+}
+
+// ---------------------------------------------------------------------------
 // Compiled-in OpenSans Western baseline for the five translated text roles
 // ---------------------------------------------------------------------------
 // The five role fonts (main_menu_title, top_nav_title, large_button, button,

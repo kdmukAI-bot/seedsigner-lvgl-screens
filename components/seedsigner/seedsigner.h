@@ -65,11 +65,13 @@ typedef struct {
 #define SEEDSIGNER_RET_BACK_BUTTON          1000u  // == RET_CODE__BACK_BUTTON
 #define SEEDSIGNER_RET_POWER_BUTTON         1001u  // == RET_CODE__POWER_BUTTON
 #define SEEDSIGNER_RET_SCREENSAVER_DISMISS  1100u  // host-handled, not Python-routed
+#define SEEDSIGNER_RET_SPLASH_COMPLETE      1101u  // opening splash finished/dismissed
 
 // Screens
 void button_list_screen(void *ctx_json);
 void main_menu_screen(void *ctx);
 void screensaver_screen(void *ctx_json);
+void splash_screen(void *ctx_json);
 void large_icon_status_screen(void *ctx_json);
 void seed_add_passphrase_screen(void *ctx_json);
 

@@ -111,6 +111,25 @@ if(SUPPORT_DISPLAY_HEIGHT_480)
     )
 endif()
 
+# Baked logo + HRF partner-logo assets, gated per display height (mirrors the
+# font blocks above). Runtime selectors pick the px_multiplier-matched variant.
+set(SEEDSIGNER_IMAGE_SOURCES "")
+if(SUPPORT_DISPLAY_HEIGHT_240)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img.c")
+endif()
+if(SUPPORT_DISPLAY_HEIGHT_320)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img_133x.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img_133x.c")
+endif()
+if(SUPPORT_DISPLAY_HEIGHT_480)
+  list(APPEND SEEDSIGNER_IMAGE_SOURCES
+    "${SEEDSIGNER_DIR}/images/seedsigner_logo_img_200x.c"
+    "${SEEDSIGNER_DIR}/images/hrf_logo_img_200x.c")
+endif()
+
 set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/gui_constants.cpp"
   "${SEEDSIGNER_DIR}/locale_fonts.cpp"
@@ -125,7 +144,6 @@ set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/input_profile.cpp"
   "${SEEDSIGNER_DIR}/navigation.cpp"
   "${SEEDSIGNER_DIR}/seedsigner.cpp"
-  "${SEEDSIGNER_DIR}/images/seedsigner_logo_img.c"
 )
 
 # Shared SDL/LVGL glue, also used by the WASM web_runner.
@@ -141,6 +159,7 @@ set(SCREEN_RUNNER_SOURCE
 add_executable(screen_runner
   ${LVGL_SOURCES}
   ${SEEDSIGNER_FONT_SOURCES}
+  ${SEEDSIGNER_IMAGE_SOURCES}
   ${SEEDSIGNER_CORE_SOURCES}
   ${RUNNER_COMMON_SOURCES}
   ${SCREEN_RUNNER_SOURCE}

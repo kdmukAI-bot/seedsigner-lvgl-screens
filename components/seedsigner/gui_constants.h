@@ -101,6 +101,31 @@ LV_FONT_DECLARE(inconsolata_semibold_24_4bpp_200x);
 #endif
 
 // ---------------------------------------------------------------------------
+// Image declarations for supported display heights
+// ---------------------------------------------------------------------------
+// Baked RGB565 logo assets, one per display-height profile, scaled by the same
+// PX_MULTIPLIER as the fonts (base 100, "_133x" = 133, "_200x" = 200). Unlike the
+// baked fonts (whose 320-height files keep a legacy "_150x" label), these images
+// are new, so they use the accurate "_133x" suffix. The SeedSigner wordmark is
+// shared by the screensaver and the opening splash; the HRF partner logo is used
+// only by the splash's partner band. Pick the right variant at runtime via
+// seedsigner_logo_for_active_profile() / hrf_logo_for_active_profile() so a
+// single-height build compiles only its own variant (selectors are #ifdef-gated
+// in lockstep with these declarations and the CMake source lists).
+#ifdef SUPPORT_DISPLAY_HEIGHT_240
+LV_IMAGE_DECLARE(seedsigner_logo_img);
+LV_IMAGE_DECLARE(hrf_logo_img);
+#endif
+#ifdef SUPPORT_DISPLAY_HEIGHT_320
+LV_IMAGE_DECLARE(seedsigner_logo_img_133x);
+LV_IMAGE_DECLARE(hrf_logo_img_133x);
+#endif
+#ifdef SUPPORT_DISPLAY_HEIGHT_480
+LV_IMAGE_DECLARE(seedsigner_logo_img_200x);
+LV_IMAGE_DECLARE(hrf_logo_img_200x);
+#endif
+
+// ---------------------------------------------------------------------------
 // Display profile: all resolution-dependent layout constants and fonts
 // ---------------------------------------------------------------------------
 struct DisplayProfile {
@@ -154,6 +179,12 @@ const DisplayProfile& active_profile();
 void set_display(int width, int height);
 int display_profile_count();
 const DisplayProfile& display_profile_at(int index);
+
+// Resolution-keyed baked image selectors — return the variant matching the
+// active profile's px_multiplier (mirrors fonts_for_multiplier()). Used by the
+// screensaver (logo) and the opening splash (logo + HRF partner band).
+const lv_image_dsc_t* seedsigner_logo_for_active_profile();
+const lv_image_dsc_t* hrf_logo_for_active_profile();
 
 // Mutable access to the active profile, for the font-registration seam
 // (font_registry.cpp) which repoints text-font pointers to install per-locale

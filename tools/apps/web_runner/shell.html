@@ -79,10 +79,13 @@
   canvas#canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges;
     touch-action: none; outline: none; background: #000; max-width: 100%; }
 
-  /* Most-recent result, shown directly under the display (like the native status bar). */
+  /* Most-recent result, shown directly under the display (like the native status bar).
+     Fades out a couple seconds after each result (same as the fullscreen toast) so a
+     fresh result is visibly distinct from a stale previous one. */
   #result-line { width: 100%; text-align: center; font-family: ui-monospace, Menlo, Consolas, monospace;
     font-size: 15px; color: #80b0e0; background: var(--panel2); border: 1px solid var(--line);
-    border-radius: 6px; padding: 7px 9px; min-height: 32px; }
+    border-radius: 6px; padding: 7px 9px; min-height: 32px;
+    opacity: 1; transition: opacity .5s ease; }
   #result-line .tag { color: var(--accent); margin-right: 8px; }
 
   /* On-screen hardware controls (joystick + side buttons) */
@@ -355,16 +358,17 @@
     else if (ev.type === 'text') { tag = 'TEXT'; body = ev.text; }
     else if (ev.type === 'aux') { tag = 'KEY'; body = ev.key; }
     var html = '<span class="tag">' + tag + '</span>' + body.replace(/</g, '&lt;');
-    // Persistent line (visible in windowed mode).
-    document.getElementById('result-line').innerHTML = html;
-    // Transient toast (visible in fullscreen): show then fade after ~1.8s.
-    if (isFullscreen()) {
-      var t = document.getElementById('result-toast');
-      t.innerHTML = html;
-      t.style.opacity = '1';
-      clearTimeout(app.toastTimer);
-      app.toastTimer = setTimeout(function () { t.style.opacity = '0'; }, 1800);
-    }
+    // Show the result, then fade it out after ~1.8s so a fresh result is visibly
+    // distinct from a stale previous one (re-showing it restarts the fade, so even
+    // an identical repeated result reads as a new event). Fullscreen uses the
+    // transient toast; windowed view fades the persistent result line itself.
+    var line = document.getElementById('result-line');
+    line.innerHTML = html;
+    var el = isFullscreen() ? document.getElementById('result-toast') : line;
+    if (el !== line) el.innerHTML = html;
+    el.style.opacity = '1';
+    clearTimeout(app.toastTimer);
+    app.toastTimer = setTimeout(function () { el.style.opacity = '0'; }, 1800);
   };
 
   // ---- Layout + canvas sizing ----

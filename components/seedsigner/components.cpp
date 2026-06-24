@@ -241,7 +241,7 @@ void label_set_line_autoscroll(lv_obj_t* label, uint32_t begin_hold_ms, uint32_t
     lv_obj_set_style_anim(label, &scroll_feel_template, LV_PART_MAIN);
 }
 
-lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button, bool show_power_button, lv_obj_t **out_back_btn, lv_obj_t **out_power_btn, const lv_font_t *title_font) {
+lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button, bool show_power_button, lv_obj_t **out_back_btn, lv_obj_t **out_power_btn, const lv_font_t *title_font, const char *title_icon, uint32_t title_icon_color) {
 
     lv_parent = lv_parent ? lv_parent : lv_scr_act();
     lv_obj_t* lv_top_nav = lv_obj_create(lv_parent);
@@ -316,7 +316,47 @@ lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button,
     const lv_font_t *eff_font = title_font ? title_font : &TOP_NAV_TITLE_FONT;
     int32_t title_w = label_subset_text_width(label, eff_font);
 
-    if (title_w > label_w) {
+    bool has_title_icon = title_icon && title_icon[0];
+
+    if (has_title_icon) {
+        // Title-adjacent contextual icon (Python TopNav with icon_name → IconTextLine):
+        // the icon sits to the LEFT of the title and the icon+title GROUP is centered.
+        // Used by e.g. SeedOptionsScreen (fingerprint). The 26px top-nav icon font is
+        // Python's ICON_FONT_SIZE + 4.
+        uint32_t icon_color = (title_icon_color == SEEDSIGNER_ICON_COLOR_DEFAULT)
+                              ? (uint32_t)BODY_FONT_COLOR : title_icon_color;
+        lv_obj_t* icon_label = lv_label_create(lv_top_nav);
+        lv_obj_set_style_pad_all(icon_label, 0, LV_PART_MAIN);
+        lv_obj_set_style_text_font(icon_label, &TOP_NAV_ICON_FONT__SEEDSIGNER, LV_PART_MAIN);
+        lv_obj_set_style_text_color(icon_label, lv_color_hex(icon_color), LV_PART_MAIN);
+        lv_label_set_text(icon_label, title_icon);
+        int32_t icon_w   = label_subset_text_width(icon_label, &TOP_NAV_ICON_FONT__SEEDSIGNER);
+        int32_t icon_gap = COMPONENT_PADDING / 2;  // Python IconTextLine icon_horizontal_spacer
+
+        // Icon-bearing titles are short contextual labels, so the title stays static
+        // (no marquee) and the icon+title group is positioned as one centered block.
+        lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+
+        int32_t group_w    = icon_w + icon_gap + title_w;
+        int32_t group_left = (nav_w - group_w) / 2;          // prefer full-nav centering
+        if (group_left < left_pad) {
+            group_left = left_pad;                            // clear the back button
+        }
+        if (group_left + group_w > nav_w - right_pad) {
+            group_left = nav_w - right_pad - group_w;         // clear the power button
+            if (group_left < left_pad) group_left = left_pad;
+        }
+        // Clamp the title's box to the space left of the right gutter so an overlong
+        // localized title clips inside the nav instead of overrunning the power button.
+        int32_t title_region = nav_w - right_pad - (group_left + icon_w + icon_gap);
+        if (title_region < 16) title_region = 16;
+        int32_t title_box = title_w < title_region ? title_w : title_region;
+
+        lv_obj_align(icon_label, LV_ALIGN_LEFT_MID, group_left, 0);
+        lv_obj_set_width(label, title_box);
+        lv_obj_align(label, LV_ALIGN_LEFT_MID, group_left + icon_w + icon_gap, 0);
+    } else if (title_w > label_w) {
         // Overflow case: clip + scroll within the region between the buttons. The
         // title starts start-justified (left here; shaped RTL via the glyph-run draw)
         // then continuously marquee-scrolls with an initial hold + a hold each time it

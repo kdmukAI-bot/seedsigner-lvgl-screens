@@ -467,7 +467,29 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
     }
     std::string title = tn["title"].get<std::string>();
 
-    out.top_nav = top_nav(out.screen, title.c_str(), show_back, show_power, &out.top_back_btn, &out.top_power_btn, title_font);
+    // Optional contextual icon beside the title (Python top_nav_icon_name /
+    // top_nav_icon_color) — e.g. SeedOptionsScreen's fingerprint. The glyph string is
+    // passed through verbatim (same PUA codepoints on both sides); the color defaults
+    // to the body font color when omitted.
+    std::string top_nav_icon;
+    uint32_t top_nav_icon_color = SEEDSIGNER_ICON_COLOR_DEFAULT;
+    if (tn.contains("icon")) {
+        if (!tn["icon"].is_string()) {
+            throw std::runtime_error("top_nav.icon must be a string");
+        }
+        top_nav_icon = tn["icon"].get<std::string>();
+    }
+    if (tn.contains("icon_color")) {
+        if (!tn["icon_color"].is_string()) {
+            throw std::runtime_error("top_nav.icon_color must be a string");
+        }
+        top_nav_icon_color = parse_hex_color(tn["icon_color"].get<std::string>());
+    }
+
+    out.top_nav = top_nav(out.screen, title.c_str(), show_back, show_power,
+                          &out.top_back_btn, &out.top_power_btn, title_font,
+                          top_nav_icon.empty() ? nullptr : top_nav_icon.c_str(),
+                          top_nav_icon_color);
     out.body = create_standard_body_content(out.screen, out.top_nav, scrollable);
 
     // Decide which scaffold mode applies based on cfg.

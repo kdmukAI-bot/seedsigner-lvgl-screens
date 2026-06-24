@@ -78,6 +78,7 @@ const int LINE_SCROLL_MIN_MS        = 300;   // floor on the resolved scroll dur
 LV_FONT_DECLARE(seedsigner_icons_48_4bpp);
 LV_FONT_DECLARE(seedsigner_icons_24_4bpp);
 LV_FONT_DECLARE(seedsigner_icons_36_4bpp);
+LV_FONT_DECLARE(seedsigner_icons_26_4bpp);
 LV_FONT_DECLARE(inconsolata_semibold_24_4bpp);
 #endif
 
@@ -88,6 +89,7 @@ LV_FONT_DECLARE(inconsolata_semibold_24_4bpp);
 LV_FONT_DECLARE(seedsigner_icons_24_4bpp_133x);
 LV_FONT_DECLARE(seedsigner_icons_36_4bpp_133x);
 LV_FONT_DECLARE(seedsigner_icons_48_4bpp_133x);
+LV_FONT_DECLARE(seedsigner_icons_26_4bpp_133x);
 LV_FONT_DECLARE(inconsolata_semibold_24_4bpp_133x);
 #endif
 
@@ -95,6 +97,7 @@ LV_FONT_DECLARE(inconsolata_semibold_24_4bpp_133x);
 LV_FONT_DECLARE(seedsigner_icons_24_4bpp_200x);
 LV_FONT_DECLARE(seedsigner_icons_36_4bpp_200x);
 LV_FONT_DECLARE(seedsigner_icons_48_4bpp_200x);
+LV_FONT_DECLARE(seedsigner_icons_26_4bpp_200x);
 LV_FONT_DECLARE(inconsolata_semibold_24_4bpp_200x);
 #endif
 
@@ -170,6 +173,11 @@ struct DisplayProfile {
     // keyboard keys and the passphrase text-entry box. Merged with the
     // LV_SYMBOL_* control glyphs so a single font covers letters + controls.
     const lv_font_t* keyboard_font;
+
+    // 26 px (base) seedsigner icon font for the top-nav contextual icon beside the
+    // title (Python TopNav uses ICON_FONT_SIZE + 4 = 26). Scales 35px at 320 height,
+    // 52px at 480.
+    const lv_font_t* top_nav_icon_font;
 };
 
 const DisplayProfile& active_profile();
@@ -226,6 +234,7 @@ DisplayProfile& active_profile_mutable();
 #define ICON_LARGE_BUTTON_FONT__SEEDSIGNER (*active_profile().icon_large_button_font)
 #define ICON_PRIMARY_SCREEN_FONT__SEEDSIGNER (*active_profile().icon_primary_screen_font)
 #define KEYBOARD_FONT                      (*active_profile().keyboard_font)
+#define TOP_NAV_ICON_FONT__SEEDSIGNER      (*active_profile().top_nav_icon_font)
 
 // ---------------------------------------------------------------------------
 // Non-scaling constants (colors, font names, etc.)

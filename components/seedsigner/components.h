@@ -6,7 +6,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
-lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button, bool show_power_button, lv_obj_t **out_back_btn, lv_obj_t **out_power_btn, const lv_font_t *title_font = nullptr);
+// Sentinel for an unset icon color: "use the default color". 0xFFFFFFFF is outside
+// the 24-bit 0xRRGGBB color space, so it can never collide with a real color. Shared
+// by top_nav()'s title icon and button_opts_t / button_list_item_t.
+#define SEEDSIGNER_ICON_COLOR_DEFAULT 0xFFFFFFFFu
+
+// top_nav. title_icon (optional): a contextual icon glyph rendered left of the title,
+// with the icon+title group centered (Python TopNav icon_name). title_icon_color
+// defaults to the body font color.
+lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button, bool show_power_button, lv_obj_t **out_back_btn, lv_obj_t **out_power_btn, const lv_font_t *title_font = nullptr, const char *title_icon = nullptr, uint32_t title_icon_color = SEEDSIGNER_ICON_COLOR_DEFAULT);
 
 // Configure an already start-justified, width-constrained single-line label to
 // continuously marquee-scroll (circular wrap) an overflowing line at a steady
@@ -31,11 +39,6 @@ void label_set_line_autoscroll(lv_obj_t* label, uint32_t begin_hold_ms, uint32_t
 // NOT valid for shaped (glyph-run) labels (the codepoint measure mis-counts conjuncts /
 // presentation forms) — use seedsigner_label_run_overflows() for those.
 int32_t label_subset_text_width(lv_obj_t* label, const lv_font_t* font);
-
-// Sentinel for an unset icon color: "use the default button font color". 0xFFFFFFFF
-// is outside the 24-bit 0xRRGGBB color space, so it can never collide with a real
-// color. Used by button_opts_t / button_list_item_t.
-#define SEEDSIGNER_ICON_COLOR_DEFAULT 0xFFFFFFFFu
 
 // Button visual style, mirroring Python ButtonListScreen.Button_cls:
 //   DEFAULT           — plain button (optional inline icons).

@@ -173,6 +173,23 @@
             "Nunchuk"
           ]
         }
+      },
+      {
+        "name": "top_nav_icon",
+        "context": {
+          "top_nav": {
+            "title": "6a4f e1b8",
+            "icon": "",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "is_button_text_centered": false,
+          "button_list": [
+            { "label": "Scan a QR code", "icon": "" },
+            { "label": "Export Xpub", "icon": "", "right_icon": "" },
+            { "label": "Sign a PSBT", "icon": "" }
+          ]
+        }
       }
     ]
   },

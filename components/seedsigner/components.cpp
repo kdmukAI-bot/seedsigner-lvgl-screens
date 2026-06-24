@@ -473,16 +473,25 @@ void button_set_label_marquee(lv_obj_t* lv_button, bool marquee) {
         return;
     }
 
-    // lv_label_set_long_mode unconditionally deletes the scroll animation, resets
-    // the offset, and marks a text refresh — so only touch it on an ACTUAL change.
-    // update_visual_focus re-asserts every non-focused button on each keypress, so
-    // an unguarded call would needlessly re-clip (and redraw) the whole list every
-    // step, and re-setting SCROLL on the still-focused button would restart its
-    // marquee from the beginning.
+    // Only act on an ACTUAL change: update_visual_focus re-asserts every button on
+    // each keypress, so re-setting the mode unguarded would re-clip (and redraw) the
+    // whole list every step and restart the focused button's marquee from the start.
     lv_label_long_mode_t want = marquee ? LV_LABEL_LONG_SCROLL_CIRCULAR
                                         : LV_LABEL_LONG_CLIP;
-    if (lv_label_get_long_mode(label) != want) {
-        lv_label_set_long_mode(label, want);
+    if (lv_label_get_long_mode(label) == want) {
+        return;
+    }
+
+    if (marquee) {
+        // Promote to a PAUSING marquee via the shared auto-scroll helper: hold
+        // start-justified for a beat, scroll at the steady ~40 px/sec rate, and hold
+        // again each time it wraps back to the start — the same feel the top-nav title
+        // and status headline use. (A bare LONG_SCROLL_CIRCULAR scrolls continuously
+        // at LVGL's default speed with no pause, which is the behavior we're fixing.)
+        label_set_line_autoscroll(label, LINE_SCROLL_BEGIN_HOLD_MS, LINE_SCROLL_BEGIN_HOLD_MS);
+    } else {
+        // Lost focus: clip back to the start edge so the label's beginning shows again.
+        lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
     }
 }
 

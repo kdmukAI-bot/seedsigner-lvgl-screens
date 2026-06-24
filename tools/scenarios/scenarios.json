@@ -88,6 +88,147 @@
             "Text file"
           ]
         }
+      },
+      {
+        "name": "left_aligned",
+        "context": {
+          "top_nav": {
+            "title": "Seed Options",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "is_button_text_centered": false,
+          "button_list": [
+            "Scan a QR code",
+            "Export Xpub",
+            "Backup this very long seed-options label that overflows the button",
+            { "label": "Discard seed", "label_color": "#ff0000" }
+          ]
+        }
+      },
+      {
+        "name": "icons",
+        "context": {
+          "top_nav": {
+            "title": "Button Icons",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "is_button_text_centered": false,
+          "button_list": [
+            { "label": "CAMERA", "icon": "\uf030" },
+            { "label": "DICE", "icon": "\uf522" },
+            { "label": "FINGERPRINT", "icon": "\ue91a" },
+            { "label": "KEYBOARD", "icon": "\uf11c" },
+            { "label": "PLUS", "icon": "\ue90f" },
+            { "label": "QRCODE", "icon": "\ue920" },
+            { "label": "CHEVRON_RIGHT", "right_icon": "\ue90a" }
+          ]
+        }
+      },
+      {
+        "name": "icons_centered",
+        "context": {
+          "top_nav": {
+            "title": "Confirm action",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "button_list": [
+            { "label": "Approve", "icon": "", "icon_color": "#30d158" },
+            { "label": "Cancel", "icon": "", "icon_color": "#ff5555" }
+          ]
+        }
+      },
+      {
+        "name": "checkbox_multi",
+        "context": {
+          "top_nav": {
+            "title": "Script Types",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "text": "Select which script types to enable.",
+          "button_style": "checkbox",
+          "checked_buttons": [0, 2],
+          "button_list": [
+            "Native SegWit",
+            "Nested SegWit",
+            "Taproot",
+            "Legacy"
+          ]
+        }
+      },
+      {
+        "name": "radio_single",
+        "context": {
+          "top_nav": {
+            "title": "Coordinator",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "button_style": "checked_selection",
+          "checked_buttons": [1],
+          "button_list": [
+            "Sparrow",
+            "Specter Desktop",
+            "BlueWallet",
+            "Nunchuk"
+          ]
+        }
+      },
+      {
+        "name": "top_nav_icon",
+        "context": {
+          "top_nav": {
+            "title": "6a4f e1b8",
+            "icon_color": "#409cff",
+            "icon": "",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "is_button_text_centered": false,
+          "button_list": [
+            { "label": "Scan a QR code", "icon": "" },
+            { "label": "Export Xpub", "icon": "", "right_icon": "" },
+            { "label": "Sign a PSBT", "icon": "" }
+          ]
+        }
+      },
+      {
+        "name": "i18n_radio",
+        "context": {
+          "top_nav": {
+            "title": "Display density",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "button_style": "checked_selection",
+          "checked_buttons": [1],
+          "is_button_text_centered": false,
+          "button_list": [
+            "Compact",
+            "Medium",
+            "Static"
+          ]
+        }
+      },
+      {
+        "name": "i18n_icons",
+        "context": {
+          "top_nav": {
+            "title": "Verify",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "is_button_text_centered": false,
+          "button_list": [
+            { "label": "Scan", "icon": "" },
+            { "label": "Verify", "icon": "" },
+            { "label": "Donate", "icon": "", "right_icon": "" },
+            { "label": "Cancel", "icon": "", "label_color": "#ff0000" }
+          ]
+        }
       }
     ]
   },

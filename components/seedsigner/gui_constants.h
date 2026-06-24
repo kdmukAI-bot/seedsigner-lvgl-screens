@@ -78,6 +78,7 @@ const int LINE_SCROLL_MIN_MS        = 300;   // floor on the resolved scroll dur
 LV_FONT_DECLARE(seedsigner_icons_48_4bpp);
 LV_FONT_DECLARE(seedsigner_icons_24_4bpp);
 LV_FONT_DECLARE(seedsigner_icons_36_4bpp);
+LV_FONT_DECLARE(seedsigner_icons_26_4bpp);
 LV_FONT_DECLARE(inconsolata_semibold_24_4bpp);
 #endif
 
@@ -88,6 +89,7 @@ LV_FONT_DECLARE(inconsolata_semibold_24_4bpp);
 LV_FONT_DECLARE(seedsigner_icons_24_4bpp_133x);
 LV_FONT_DECLARE(seedsigner_icons_36_4bpp_133x);
 LV_FONT_DECLARE(seedsigner_icons_48_4bpp_133x);
+LV_FONT_DECLARE(seedsigner_icons_26_4bpp_133x);
 LV_FONT_DECLARE(inconsolata_semibold_24_4bpp_133x);
 #endif
 
@@ -95,6 +97,7 @@ LV_FONT_DECLARE(inconsolata_semibold_24_4bpp_133x);
 LV_FONT_DECLARE(seedsigner_icons_24_4bpp_200x);
 LV_FONT_DECLARE(seedsigner_icons_36_4bpp_200x);
 LV_FONT_DECLARE(seedsigner_icons_48_4bpp_200x);
+LV_FONT_DECLARE(seedsigner_icons_26_4bpp_200x);
 LV_FONT_DECLARE(inconsolata_semibold_24_4bpp_200x);
 #endif
 
@@ -170,6 +173,11 @@ struct DisplayProfile {
     // keyboard keys and the passphrase text-entry box. Merged with the
     // LV_SYMBOL_* control glyphs so a single font covers letters + controls.
     const lv_font_t* keyboard_font;
+
+    // 26 px (base) seedsigner icon font for the top-nav contextual icon beside the
+    // title (Python TopNav uses ICON_FONT_SIZE + 4 = 26). Scales 35px at 320 height,
+    // 52px at 480.
+    const lv_font_t* top_nav_icon_font;
 };
 
 const DisplayProfile& active_profile();
@@ -226,6 +234,7 @@ DisplayProfile& active_profile_mutable();
 #define ICON_LARGE_BUTTON_FONT__SEEDSIGNER (*active_profile().icon_large_button_font)
 #define ICON_PRIMARY_SCREEN_FONT__SEEDSIGNER (*active_profile().icon_primary_screen_font)
 #define KEYBOARD_FONT                      (*active_profile().keyboard_font)
+#define TOP_NAV_ICON_FONT__SEEDSIGNER      (*active_profile().top_nav_icon_font)
 
 // ---------------------------------------------------------------------------
 // Non-scaling constants (colors, font names, etc.)
@@ -240,11 +249,8 @@ const int ACCENT_COLOR = 0xff9f0a;
 const int TESTNET_COLOR = 0x00f100;
 const int REGTEST_COLOR = 0x00caf1;
 
-static constexpr const char* ICON_FONT_NAME__FONT_AWESOME = "Font_Awesome_6_Free-Solid-900";
-
 const int BODY_FONT_COLOR = 0xf8f8f8;
 
-static constexpr const char* FIXED_WIDTH_FONT_NAME = "Inconsolata-Regular";
 static constexpr const char* FIXED_WIDTH_EMPHASIS_FONT_NAME = "Inconsolata-SemiBold";
 
 const int LABEL_FONT_COLOR = 0x707070;
@@ -305,10 +311,19 @@ class SeedSignerIconConstants {
         // Input icons
         static constexpr const char* DELETE = "\ue922";
         static constexpr const char* SPACE = "\ue923";
+};
 
-        // Must be updated whenever new icons are added. See usage in `Icon` class below.
-        static constexpr const char* MIN_VALUE = SCAN;
-        static constexpr const char* MAX_VALUE = SPACE;
+// FontAwesome (Solid) icons that appear on SeedSigner buttons. These glyphs are NOT in
+// seedsigner-icons.otf \u2014 they are extracted from Font_Awesome_6_Free-Solid-900.otf and
+// MERGED into the seedsigner icon font at bake time (scripts/bake_icon_fonts.py), so
+// they render through ICON_FONT__SEEDSIGNER exactly like the PUA icons above. Only the
+// glyphs listed here are baked in; when a new FontAwesome button icon is introduced,
+// add its codepoint to the bake script's FontAwesome range too.
+class FontAwesomeIconConstants {
+    public:
+        static constexpr const char* CAMERA   = "\uf030";
+        static constexpr const char* KEYBOARD = "\uf11c";
+        static constexpr const char* DICE     = "\uf522";
 };
 
 

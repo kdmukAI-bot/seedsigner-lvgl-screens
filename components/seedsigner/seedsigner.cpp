@@ -16,6 +16,8 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
+#include <cctype>
 #include <set>
 
 using json = nlohmann::json;
@@ -308,9 +310,101 @@ static bool read_button_list_labels(const json &cfg, std::vector<std::string> &o
             out.push_back(entry.get<std::string>());
         } else if (entry.is_array() && !entry.empty() && entry[0].is_string()) {
             out.push_back(entry[0].get<std::string>());
+        } else if (entry.is_object() && entry.contains("label") && entry["label"].is_string()) {
+            // Object form (per-button icons) — the label is all this reader needs.
+            out.push_back(entry["label"].get<std::string>());
         } else {
-            throw std::runtime_error("button_list entries must be string or array with string label at index 0");
+            throw std::runtime_error("button_list entries must be string, array, or object with a string label");
         }
+    }
+    return true;
+}
+
+// Parse a JSON color string ("#RRGGBB", "0xRRGGBB", or "RRGGBB") to a 0xRRGGBB int.
+// Throws on a malformed value so bad cfg fails fast (same convention as the rest of
+// the screen-config parser).
+static uint32_t parse_hex_color(const std::string &s) {
+    std::string h = s;
+    if (h.rfind("#", 0) == 0) {
+        h = h.substr(1);
+    } else if (h.rfind("0x", 0) == 0 || h.rfind("0X", 0) == 0) {
+        h = h.substr(2);
+    }
+    if (h.size() != 6) {
+        throw std::runtime_error("color must be a 6-digit hex string like \"#30D158\"");
+    }
+    for (char c : h) {
+        if (!std::isxdigit((unsigned char)c)) {
+            throw std::runtime_error("color must be a 6-digit hex string like \"#30D158\"");
+        }
+    }
+    return (uint32_t)std::strtoul(h.c_str(), nullptr, 16);
+}
+
+// Richer button_list reader: parallels read_button_list_labels but also captures the
+// per-item inline icon / right icon / icon color when an entry is an OBJECT. Accepts:
+//   - "Label"                                                  → label only
+//   - ["Label", ...]                                           → label at index 0
+//   - {"label","icon"?,"icon_color"?,"right_icon"?}            → label + inline icons
+// Returns true if "button_list" was present and well-formed; false (out cleared) if
+// missing. Throws on a malformed entry so screens fail fast.
+struct button_item_cfg_t {
+    std::string label;
+    std::string icon;        // empty = none
+    std::string right_icon;  // empty = none
+    uint32_t    icon_color = SEEDSIGNER_ICON_COLOR_DEFAULT;
+    uint32_t    label_color = SEEDSIGNER_ICON_COLOR_DEFAULT;
+    bool        is_checked = false;  // set from cfg["checked_buttons"] by the scaffold
+};
+
+static bool read_button_list_items(const json &cfg, std::vector<button_item_cfg_t> &out) {
+    out.clear();
+    if (!cfg.contains("button_list")) {
+        return false;
+    }
+    if (!cfg["button_list"].is_array()) {
+        throw std::runtime_error("button_list must be an array");
+    }
+
+    for (const auto &entry : cfg["button_list"]) {
+        button_item_cfg_t item;
+        if (entry.is_string()) {
+            item.label = entry.get<std::string>();
+        } else if (entry.is_array() && !entry.empty() && entry[0].is_string()) {
+            item.label = entry[0].get<std::string>();
+        } else if (entry.is_object()) {
+            if (!entry.contains("label") || !entry["label"].is_string()) {
+                throw std::runtime_error("button_list object entry requires a string \"label\"");
+            }
+            item.label = entry["label"].get<std::string>();
+            if (entry.contains("icon")) {
+                if (!entry["icon"].is_string()) {
+                    throw std::runtime_error("button_list \"icon\" must be a string");
+                }
+                item.icon = entry["icon"].get<std::string>();
+            }
+            if (entry.contains("right_icon")) {
+                if (!entry["right_icon"].is_string()) {
+                    throw std::runtime_error("button_list \"right_icon\" must be a string");
+                }
+                item.right_icon = entry["right_icon"].get<std::string>();
+            }
+            if (entry.contains("icon_color")) {
+                if (!entry["icon_color"].is_string()) {
+                    throw std::runtime_error("button_list \"icon_color\" must be a string");
+                }
+                item.icon_color = parse_hex_color(entry["icon_color"].get<std::string>());
+            }
+            if (entry.contains("label_color")) {
+                if (!entry["label_color"].is_string()) {
+                    throw std::runtime_error("button_list \"label_color\" must be a string");
+                }
+                item.label_color = parse_hex_color(entry["label_color"].get<std::string>());
+            }
+        } else {
+            throw std::runtime_error("button_list entries must be a string, array, or object with a string \"label\"");
+        }
+        out.push_back(item);
     }
     return true;
 }
@@ -380,12 +474,34 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
     }
     std::string title = tn["title"].get<std::string>();
 
-    out.top_nav = top_nav(out.screen, title.c_str(), show_back, show_power, &out.top_back_btn, &out.top_power_btn, title_font);
+    // Optional contextual icon beside the title (Python top_nav_icon_name /
+    // top_nav_icon_color) — e.g. SeedOptionsScreen's fingerprint. The glyph string is
+    // passed through verbatim (same PUA codepoints on both sides); the color defaults
+    // to the body font color when omitted.
+    std::string top_nav_icon;
+    uint32_t top_nav_icon_color = SEEDSIGNER_ICON_COLOR_DEFAULT;
+    if (tn.contains("icon")) {
+        if (!tn["icon"].is_string()) {
+            throw std::runtime_error("top_nav.icon must be a string");
+        }
+        top_nav_icon = tn["icon"].get<std::string>();
+    }
+    if (tn.contains("icon_color")) {
+        if (!tn["icon_color"].is_string()) {
+            throw std::runtime_error("top_nav.icon_color must be a string");
+        }
+        top_nav_icon_color = parse_hex_color(tn["icon_color"].get<std::string>());
+    }
+
+    out.top_nav = top_nav(out.screen, title.c_str(), show_back, show_power,
+                          &out.top_back_btn, &out.top_power_btn, title_font,
+                          top_nav_icon.empty() ? nullptr : top_nav_icon.c_str(),
+                          top_nav_icon_color);
     out.body = create_standard_body_content(out.screen, out.top_nav, scrollable);
 
     // Decide which scaffold mode applies based on cfg.
-    std::vector<std::string> button_labels;
-    bool has_button_list = read_button_list_labels(cfg, button_labels);
+    std::vector<button_item_cfg_t> button_items;
+    bool has_button_list = read_button_list_items(cfg, button_items);
     bool is_bottom_list = false;
     if (cfg.contains("is_bottom_list")) {
         if (!cfg["is_bottom_list"].is_boolean()) {
@@ -394,13 +510,64 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
         is_bottom_list = cfg["is_bottom_list"].get<bool>();
     }
 
+    // Python ButtonListScreen.is_button_text_centered (default True). false →
+    // left-align every button's label (used by Seed Options, the tools menu, and
+    // most non-main-menu list screens). Threaded into button_list()/button_ex below.
+    bool is_button_text_centered = true;
+    if (cfg.contains("is_button_text_centered")) {
+        if (!cfg["is_button_text_centered"].is_boolean()) {
+            throw std::runtime_error("is_button_text_centered must be a boolean");
+        }
+        is_button_text_centered = cfg["is_button_text_centered"].get<bool>();
+    }
+
+    // Button style, mirroring Python ButtonListScreen.Button_cls: "default" |
+    // "checkbox" (multi-select) | "checked_selection" (single-select radio). The
+    // checked indices come from cfg["checked_buttons"] (a list of ints), stamped onto
+    // each item's is_checked below. Both are screen-wide; the style is one value for
+    // the whole list, matching Python.
+    button_style_t button_style = BUTTON_STYLE_DEFAULT;
+    if (cfg.contains("button_style")) {
+        if (!cfg["button_style"].is_string()) {
+            throw std::runtime_error("button_style must be a string");
+        }
+        std::string s = cfg["button_style"].get<std::string>();
+        if (s == "default") {
+            button_style = BUTTON_STYLE_DEFAULT;
+        } else if (s == "checkbox") {
+            button_style = BUTTON_STYLE_CHECKBOX;
+        } else if (s == "checked_selection") {
+            button_style = BUTTON_STYLE_CHECKED_SELECTION;
+        } else {
+            throw std::runtime_error("button_style must be \"default\", \"checkbox\", or \"checked_selection\"");
+        }
+    }
+
+    std::set<int> checked_buttons;
+    if (cfg.contains("checked_buttons")) {
+        if (!cfg["checked_buttons"].is_array()) {
+            throw std::runtime_error("checked_buttons must be an array of integers");
+        }
+        for (const auto &idx : cfg["checked_buttons"]) {
+            if (!idx.is_number_integer() || idx.get<int>() < 0) {
+                throw std::runtime_error("checked_buttons entries must be non-negative integers");
+            }
+            checked_buttons.insert(idx.get<int>());
+        }
+    }
+
+    // Stamp is_checked onto each item from checked_buttons (no-op for DEFAULT style).
+    for (size_t i = 0; i < button_items.size(); ++i) {
+        button_items[i].is_checked = checked_buttons.count((int)i) > 0;
+    }
+
     if (!has_button_list) {
         // Mode 1: legacy. body == upper_body, no scaffold buttons.
         out.upper_body = out.body;
         return out;
     }
 
-    if (button_labels.size() > SEEDSIGNER_SCAFFOLD_MAX_BUTTONS) {
+    if (button_items.size() > SEEDSIGNER_SCAFFOLD_MAX_BUTTONS) {
         throw std::runtime_error("button_list exceeds SEEDSIGNER_SCAFFOLD_MAX_BUTTONS");
     }
 
@@ -419,13 +586,20 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
     // navigation (scroll_to_view), so this path gets NO page-scroll step.
     if (!is_bottom_list && !has_intro_text) {
         std::vector<button_list_item_t> items;
-        items.reserve(button_labels.size());
-        for (const auto &label : button_labels) {
-            button_list_item_t item = { .label = label.c_str(), .value = NULL };
+        items.reserve(button_items.size());
+        for (const auto &it : button_items) {
+            button_list_item_t item = {};
+            item.label = it.label.c_str();
+            item.value = NULL;
+            item.icon = it.icon.empty() ? nullptr : it.icon.c_str();
+            item.right_icon = it.right_icon.empty() ? nullptr : it.right_icon.c_str();
+            item.icon_color = it.icon_color;
+            item.label_color = it.label_color;
+            item.is_checked = it.is_checked;
             items.push_back(item);
         }
 
-        button_list(out.body, items.data(), items.size());
+        button_list(out.body, items.data(), items.size(), is_button_text_centered, button_style);
 
         // Discover the buttons that button_list() created so navigation can
         // reach them through the scaffold.
@@ -480,10 +654,31 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
         lv_obj_remove_flag(out.button_list_spacer, LV_OBJ_FLAG_SCROLLABLE);
     }
 
-    for (size_t i = 0; i < button_labels.size(); ++i) {
-        // `button()`'s second arg is unused under flex layout — flex
-        // overrides any align_to. Pass NULL for clarity.
-        lv_obj_t *btn = button(out.body, button_labels[i].c_str(), NULL);
+    // Shared leading-icon column = the widest leading icon on THIS screen, so the
+    // left-aligned labels all begin at the same x (adapts to the icons in use).
+    int32_t icon_column_w = 0;
+    for (const auto &it : button_items) {
+        int32_t w = inline_icon_width(it.icon.empty() ? nullptr : it.icon.c_str());
+        if (w > icon_column_w) icon_column_w = w;
+    }
+
+    for (size_t i = 0; i < button_items.size(); ++i) {
+        // align_to is unused under flex layout — flex positions the children — so
+        // pass NULL. is_text_centered carries the screen's centering choice; the
+        // per-item icon fields carry any inline/right icon + color.
+        const button_item_cfg_t &it = button_items[i];
+        button_opts_t opts = {};
+        opts.text = it.label.c_str();
+        opts.align_to = NULL;
+        opts.is_text_centered = is_button_text_centered;
+        opts.icon = it.icon.empty() ? nullptr : it.icon.c_str();
+        opts.right_icon = it.right_icon.empty() ? nullptr : it.right_icon.c_str();
+        opts.icon_color = it.icon_color;
+        opts.label_color = it.label_color;
+        opts.style = button_style;        // screen-wide checkbox/radio/default
+        opts.is_checked = it.is_checked;  // per-item checked state
+        opts.icon_column_w = icon_column_w;  // shared column so labels line up
+        lv_obj_t *btn = button_ex(out.body, &opts);
         out.button_list[i] = btn;
         out.button_list_count = i + 1;
     }

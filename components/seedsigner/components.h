@@ -6,7 +6,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
-lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button, bool show_power_button, lv_obj_t **out_back_btn, lv_obj_t **out_power_btn, const lv_font_t *title_font = nullptr);
+// Sentinel for an unset icon color: "use the default color". 0xFFFFFFFF is outside
+// the 24-bit 0xRRGGBB color space, so it can never collide with a real color. Shared
+// by top_nav()'s title icon and button_opts_t / button_list_item_t.
+#define SEEDSIGNER_ICON_COLOR_DEFAULT 0xFFFFFFFFu
+
+// top_nav. title_icon (optional): a contextual icon glyph rendered left of the title,
+// with the icon+title group centered (Python TopNav icon_name). title_icon_color
+// defaults to the body font color.
+lv_obj_t* top_nav(lv_obj_t* lv_parent, const char *title, bool show_back_button, bool show_power_button, lv_obj_t **out_back_btn, lv_obj_t **out_power_btn, const lv_font_t *title_font = nullptr, const char *title_icon = nullptr, uint32_t title_icon_color = SEEDSIGNER_ICON_COLOR_DEFAULT);
 
 // Configure an already start-justified, width-constrained single-line label to
 // continuously marquee-scroll (circular wrap) an overflowing line at a steady
@@ -32,14 +40,60 @@ void label_set_line_autoscroll(lv_obj_t* label, uint32_t begin_hold_ms, uint32_t
 // presentation forms) — use seedsigner_label_run_overflows() for those.
 int32_t label_subset_text_width(lv_obj_t* label, const lv_font_t* font);
 
+// Button visual style, mirroring Python ButtonListScreen.Button_cls:
+//   DEFAULT           — plain button (optional inline icons).
+//   CHECKBOX          — multi-select: a leading checkbox glyph, ticked when checked
+//                       (CheckboxButton). Always left-aligned.
+//   CHECKED_SELECTION — single-select / radio: a leading check glyph only when
+//                       checked, but the space is reserved when unchecked so rows
+//                       align (CheckedSelectionButton). Always left-aligned.
+typedef enum {
+    BUTTON_STYLE_DEFAULT = 0,
+    BUTTON_STYLE_CHECKBOX,
+    BUTTON_STYLE_CHECKED_SELECTION,
+} button_style_t;
+
 typedef struct {
     const char *label;
     void *value;
+    const char *icon;        // leading inline icon glyph (SeedSigner icon font), or NULL
+    const char *right_icon;  // trailing right-justified icon glyph, or NULL
+    uint32_t    icon_color;  // leading-icon color 0xRRGGBB, or SEEDSIGNER_ICON_COLOR_DEFAULT
+    uint32_t    label_color; // label text color 0xRRGGBB, or SEEDSIGNER_ICON_COLOR_DEFAULT
+    bool        is_checked;  // checkbox / checked-selection state (ignored for DEFAULT)
 } button_list_item_t;
 
+// Options for button_ex() — the full-featured list-button builder. button() is a
+// thin wrapper that fills the defaults (centered text, no icons). Parity features
+// add fields here over time; designated initializers leave unset fields zeroed, so
+// the wrapper and every call site stay source-compatible as the struct grows.
+typedef struct {
+    const char    *text;              // label text (NULL renders empty)
+    lv_obj_t      *align_to;          // chain-align anchor: align below this object, or
+                                      // NULL to align to the parent's top (ignored when
+                                      // the parent uses a flex layout, which positions it)
+    bool           is_text_centered;  // true: center the label; false: left-align it
+    const char    *icon;              // leading inline icon glyph, or NULL
+    const char    *right_icon;        // trailing right-justified icon glyph, or NULL
+    uint32_t       icon_color;        // leading-icon color, or SEEDSIGNER_ICON_COLOR_DEFAULT
+    uint32_t       label_color;       // label text color, or SEEDSIGNER_ICON_COLOR_DEFAULT
+    button_style_t style;             // DEFAULT / CHECKBOX / CHECKED_SELECTION
+    bool           is_checked;        // checked state for the checkbox/radio styles
+    int32_t        icon_column_w;     // left-icon column width to reserve so left-aligned
+                                      // labels start at the SAME x across a list (the max
+                                      // left-icon width on that screen). 0 = use this
+                                      // button's own icon width (standalone button).
+} button_opts_t;
+
+// Width (px) of an inline icon glyph in the active profile's inline icon font.
+// Callers (button_list / the scaffold) take the MAX across a list's leading icons to
+// size a shared icon column so left-aligned labels line up. 0 for NULL/empty.
+int32_t inline_icon_width(const char* glyph);
+
 lv_obj_t* button(lv_obj_t* lv_parent, const char* text, lv_obj_t* align_to);
+lv_obj_t* button_ex(lv_obj_t* lv_parent, const button_opts_t* opts);
 lv_obj_t* large_icon_button(lv_obj_t* lv_parent, const char* icon, const char* text, lv_obj_t* align_to);
-lv_obj_t* button_list(lv_obj_t* lv_parent, const button_list_item_t *items, size_t item_count);
+lv_obj_t* button_list(lv_obj_t* lv_parent, const button_list_item_t *items, size_t item_count, bool is_button_text_centered, button_style_t style);
 
 void button_set_active(lv_obj_t* lv_button, bool active);
 

@@ -18,6 +18,11 @@ list(APPEND srcs
     "fonts/seedsigner_icons_24_4bpp_200x.c"
     "fonts/seedsigner_icons_36_4bpp_200x.c"
     "fonts/seedsigner_icons_48_4bpp_200x.c"
+    # top_nav contextual title icon (26px) — one per display-height profile;
+    # --gc-sections drops the unused-resolution variants at link.
+    "fonts/seedsigner_icons_26_4bpp.c"
+    "fonts/seedsigner_icons_26_4bpp_133x.c"
+    "fonts/seedsigner_icons_26_4bpp_200x.c"
     "fonts/inconsolata_semibold_24_4bpp.c"
     "fonts/inconsolata_semibold_24_4bpp_133x.c"
     "fonts/inconsolata_semibold_24_4bpp_200x.c"

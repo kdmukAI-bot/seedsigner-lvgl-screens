@@ -297,27 +297,52 @@ static void install_western_baseline(DisplayProfile& p) {
         { &DisplayProfile::body_font,            17,                false },
     };
 
+    // Multiple roles can resolve to the same (weight, px) after scaling — e.g.
+    // top_nav_title and large_button both land on 20 px SemiBold at the 240-height
+    // profile; button and large_button on 23 px at 320. tiny_ttf would rasterize a
+    // byte-identical font for each, and every instance carries its own set of glyph
+    // caches on the constrained internal pool. So create one instance per distinct
+    // (semibold, px) and point colliding roles at the shared font. These baseline
+    // fonts are process-lifetime and never destroyed, so sharing here is purely
+    // "don't build the duplicate" — no lifecycle bookkeeping needed.
+    struct Created { int px; bool semibold; lv_font_t* font; };
+    Created created[sizeof(roles) / sizeof(roles[0])];
+    int created_count = 0;
+
     for (const RoleSpec& r : roles) {
         const int px = px_scale(r.base_size, mult);
 
-        const uint8_t* data = r.semibold ? opensans_western_semibold_ttf
-                                         : opensans_western_regular_ttf;
-        const size_t   len  = r.semibold ? opensans_western_semibold_ttf_len
-                                         : opensans_western_regular_ttf_len;
-
-        // KERNING_NONE: our closed label corpus doesn't need pair kerning.
-        // Cache size = SEEDSIGNER_TTF_CACHE_SIZE (gui_constants.h): enabled by
-        // default. The cache retains bitmaps, so every target must back LVGL with
-        // adequate RAM/PSRAM; against a too-small fixed pool it OOMs (→ assert-
-        // handler spin). See docs/knowledge/tiny-ttf-cache-spin-root-cause.md.
-        lv_font_t* f = lv_tiny_ttf_create_data_ex(data, len, px,
-                                                  LV_FONT_KERNING_NONE,
-                                                  SEEDSIGNER_TTF_CACHE_SIZE);
-        if (!f) {
-            fprintf(stderr, "FATAL: failed to rasterize OpenSans Western baseline "
-                            "(role px=%d)\n", px);
-            abort();
+        // Reuse an instance already built for this (semibold, px) in this profile.
+        lv_font_t* f = nullptr;
+        for (int i = 0; i < created_count; ++i) {
+            if (created[i].px == px && created[i].semibold == r.semibold) {
+                f = created[i].font;
+                break;
+            }
         }
+
+        if (!f) {
+            const uint8_t* data = r.semibold ? opensans_western_semibold_ttf
+                                             : opensans_western_regular_ttf;
+            const size_t   len  = r.semibold ? opensans_western_semibold_ttf_len
+                                             : opensans_western_regular_ttf_len;
+
+            // KERNING_NONE: our closed label corpus doesn't need pair kerning.
+            // Cache size = SEEDSIGNER_TTF_CACHE_SIZE (gui_constants.h): enabled by
+            // default. The cache retains bitmaps, so every target must back LVGL with
+            // adequate RAM/PSRAM; against a too-small fixed pool it OOMs (→ assert-
+            // handler spin). See docs/knowledge/tiny-ttf-cache-spin-root-cause.md.
+            f = lv_tiny_ttf_create_data_ex(data, len, px,
+                                           LV_FONT_KERNING_NONE,
+                                           SEEDSIGNER_TTF_CACHE_SIZE);
+            if (!f) {
+                fprintf(stderr, "FATAL: failed to rasterize OpenSans Western baseline "
+                                "(role px=%d)\n", px);
+                abort();
+            }
+            created[created_count++] = {px, r.semibold, f};
+        }
+
         p.*(r.field) = f;
     }
 

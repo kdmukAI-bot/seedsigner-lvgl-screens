@@ -8,13 +8,37 @@
 
 #include "runner_core.h"
 #include "overlay_manager.h"
+#include "locale_loader.h"   // ss_load_locale / ss_unload_locale / ss_reap_retired
 
 #include "lvgl.h"
 
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
+
+// Filesystem pack provider for the locale loader: reads lang-packs/<locale>/<file>
+// into a reusable scratch buffer (the loader copies what it keeps before the next
+// call). Mirrors the screenshot generator's provider; lets the headless test drive
+// the real per-locale font registration path. Resolves relative to the test's CWD,
+// which CI runs from the repo root (where lang-packs/ lives).
+static std::vector<uint8_t> g_pack_scratch;
+static bool fs_pack_provider(const char* locale, const char* file,
+                             const uint8_t** bytes, size_t* len, void* /*user*/) {
+    std::string path = std::string("lang-packs/") + locale + "/" + file;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        fprintf(stderr, "test: missing pack file: %s\n", path.c_str());
+        return false;
+    }
+    g_pack_scratch.assign((std::istreambuf_iterator<char>(in)),
+                          std::istreambuf_iterator<char>());
+    *bytes = g_pack_scratch.data();
+    *len = g_pack_scratch.size();
+    return true;
+}
 
 static int count_nonzero(const uint16_t* fb, int n) {
     int c = 0;
@@ -157,6 +181,57 @@ int main(int argc, char** argv) {
     idle_tick(400);
     check(!overlay_manager_is_screensaver_active(), "timeout=0 while active => dismissed");
     check(lv_scr_act() == home, "prior screen restored after disable");
+
+    // -----------------------------------------------------------------------
+    // Locale font registration: dedup + retire/reap lifecycle (font-memory
+    // Task A). Loads real packs from lang-packs/<locale>/, renders, then unloads
+    // and reaps across a screen swap. Exercises the paths where roles SHARE a
+    // tiny_ttf instance and the reap must destroy each one exactly once:
+    //   - CJK Primary (zh): large_button == top_nav_title share a 23px script @240
+    //   - shaping Primary (hi): glyph-run path + Primary share, reaped on switch
+    //   - Fallback pack (ru): button == large_button share a 23px Cyrillic leaf @320
+    // A per-registration (double) free of a shared script would crash here — loudly
+    // under ASan, and corrupts the heap otherwise. Reaching the asserts means the
+    // shared-instance bookkeeping (and the baseline restore after reap) held.
+    // -----------------------------------------------------------------------
+    printf("\n-- locale font dedup + retire/reap lifecycle --\n");
+    {
+        const std::string loc_ctx =
+            "{\"top_nav\":{\"title\":\"Settings\",\"show_back_button\":true},"
+            "\"button_list\":[\"Language\",\"Camera\",\"Network\"]}";
+
+        // Load a locale, render it, then move OFF it the way production does:
+        // retire its fonts (unload), build a NEW screen so the old one (holding raw
+        // font pointers) is deleted, then reap. This is the exact sequence that
+        // double-frees a shared script if reap destroys per-registration.
+        auto load_render_reap = [&](const char* loc, int w, int h) -> bool {
+            runner_core::resize(w, h);
+            bool loaded = ss_load_locale(loc, fs_pack_provider, nullptr);
+            runner_core::load_screen("button_list_screen", loc_ctx);
+            for (int i = 0; i < 3; ++i) runner_core::tick(16);
+            int px = count_nonzero(runner_core::framebuffer(), w * h);
+            ss_unload_locale();                                  // retire fonts
+            runner_core::load_screen("button_list_screen", loc_ctx);  // old screen deleted
+            for (int i = 0; i < 3; ++i) runner_core::tick(16);
+            ss_reap_retired();                                   // destroy retired (once each)
+            return loaded && px > 200;
+        };
+
+        check(load_render_reap("zh_Hans_CN", 240, 240),
+              "zh_Hans_CN load/render/reap (CJK Primary share @240)");
+        check(load_render_reap("hi", 240, 240),
+              "hi load/render/reap (shaping Primary + glyph runs)");
+        check(load_render_reap("ru", 480, 320),
+              "ru load/render/reap (Fallback pack share @480x320)");
+
+        // Back on the English baseline: the restore must repoint every role at a
+        // live compiled-in font — no dangling pointer into the just-reaped locale.
+        runner_core::resize(240, 240);
+        runner_core::load_screen("button_list_screen", loc_ctx);
+        for (int i = 0; i < 3; ++i) runner_core::tick(16);
+        check(count_nonzero(runner_core::framebuffer(), 240 * 240) > 200,
+              "english baseline renders after locale reap (no dangling font)");
+    }
 
     printf("\n%s (%d failure(s))\n", failures == 0 ? "ALL OK" : "FAILED", failures);
     return failures == 0 ? 0 : 1;

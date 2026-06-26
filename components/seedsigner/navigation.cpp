@@ -4,8 +4,6 @@
 
 #include <cmath>
 
-#define NAV_INDEX_NONE ((size_t)-1)
-
 extern "C" __attribute__((weak)) void seedsigner_lvgl_on_aux_key(const char *key_name) {
     (void)key_name;
 }
@@ -21,6 +19,7 @@ typedef struct {
     nav_aux_policy_t  aux_policy;
     lv_obj_t     *scroll_obj;          // NULL unless the screen opted into scrolling
     bool          scroll_then_buttons;  // insert a NAV_ZONE_SCROLL step before the buttons
+    bool          top_is_back;          // top_item is a BACK button (vs a power button)
 } nav_ctx_t;
 
 
@@ -332,7 +331,16 @@ static void nav_key_handler(lv_event_t *e) {
             }
             return;
         }
-        // LEFT / RIGHT: no-op in vertical body layout.
+        // LEFT: shortcut up to the top-nav BACK button (Python parity — jump
+        // straight to Back from any body item). Only when a body item is focused and
+        // the top item is actually a back button (not a lone power button). RIGHT:
+        // no-op in vertical body layout.
+        if (key == LV_KEY_LEFT &&
+            ctx->zone == NAV_ZONE_BODY &&
+            ctx->top_item && ctx->top_is_back) {
+            ctx->zone = NAV_ZONE_TOP;
+            update_visual_focus(ctx);
+        }
         return;
     }
 
@@ -402,6 +410,7 @@ void nav_bind(const nav_config_t *cfg) {
 
     // Top item: back and power are mutually exclusive; take whichever is set.
     ctx->top_item = cfg->top_back_btn ? cfg->top_back_btn : cfg->top_power_btn;
+    ctx->top_is_back = (cfg->top_back_btn != NULL);
 
     // Copy body items array.
     ctx->body_count = cfg->body_item_count;
@@ -447,14 +456,29 @@ void nav_bind(const nav_config_t *cfg) {
             ctx->zone = NAV_ZONE_TOP;
         }
 
-        // An overflowing scroll screen starts in the scroll region at the very top
-        // with nothing highlighted: the user reads from the beginning, the first
-        // DOWN scrolls, and the bottom button is reached only after scrolling all
-        // the way down. The back button is NOT pre-focused — an UP at the top
-        // surfaces it. (Overrides the body-button default above.)
+        // When the body overflows, two behaviors are possible — selected by whether
+        // the caller supplied a CONCRETE initial body index:
+        //
+        //  - Concrete index (button lists / menus pass 0; a settings re-render passes
+        //    the row to restore): KEEP that item focused and scroll it into view, so a
+        //    button is always active — there is no "nothing selected" on load.
+        //  - NAV_INDEX_NONE (status / warning screens): START UNFOCUSED at the top so
+        //    the user scrolls through the content before any button becomes active; an
+        //    UP at the top then surfaces the back button. (When such a screen instead
+        //    FITS, the fallback above already focused its first button — so it's only
+        //    unfocused while scrolling is genuinely required.)
         if (ctx->scroll_then_buttons && ctx->scroll_obj) {
-            ctx->zone = NAV_ZONE_SCROLL;
-            lv_obj_scroll_to_y(ctx->scroll_obj, 0, LV_ANIM_OFF);
+            bool keep_focus = cfg->initial_body_index != NAV_INDEX_NONE &&
+                              ctx->zone == NAV_ZONE_BODY &&
+                              ctx->body_items &&
+                              ctx->body_index < ctx->body_count &&
+                              ctx->body_items[ctx->body_index];
+            if (keep_focus) {
+                lv_obj_scroll_to_view(ctx->body_items[ctx->body_index], LV_ANIM_OFF);
+            } else {
+                ctx->zone = NAV_ZONE_SCROLL;
+                lv_obj_scroll_to_y(ctx->scroll_obj, 0, LV_ANIM_OFF);
+            }
         }
 
         // Apply initial visual highlight.

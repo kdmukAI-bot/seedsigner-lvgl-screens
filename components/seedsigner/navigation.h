@@ -10,6 +10,10 @@
 extern "C" {
 #endif
 
+// Sentinel for nav_config_t.initial_body_index meaning "no concrete default focus."
+// See that field's comment for how it interacts with overflow/scroll-then-buttons.
+#define NAV_INDEX_NONE ((size_t)-1)
+
 typedef enum {
     NAV_ZONE_TOP = 0,
     NAV_ZONE_BODY = 1,
@@ -48,6 +52,13 @@ typedef struct {
     size_t body_item_count;
     nav_body_layout_t body_layout;
     nav_aux_policy_t aux_policy;
+
+    // Which body item is focused on load. A CONCRETE index (button lists pass 0; a
+    // settings re-render passes the row to restore) stays focused even when the body
+    // overflows — it is scrolled into view, so a button is always active.
+    // NAV_INDEX_NONE means "no forced default": the first item is focused when the
+    // screen fits, but the screen starts UNFOCUSED (read-first) while scrolling is
+    // required to reach the buttons (status / warning screens). See nav_bind.
     size_t initial_body_index;
     bool has_input_mode_override;
     input_mode_t input_mode_override;

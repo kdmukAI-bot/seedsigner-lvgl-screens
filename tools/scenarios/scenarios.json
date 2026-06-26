@@ -90,6 +90,42 @@
         }
       },
       {
+        "name": "intro_text_restore",
+        "context": {
+          "top_nav": {
+            "title": "Export Wallet",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "text": "Choose how to export this wallet's public descriptor. The QR option encodes the descriptor for an air-gapped transfer; the file options write it to the SD card. Review the coordinator's requirements before you continue, then pick the format it expects.",
+          "button_list": [
+            "QR code",
+            "JSON file",
+            "Text file",
+            "Specter desktop",
+            "Sparrow",
+            "BlueWallet"
+          ],
+          "initial_selected_index": 4
+        }
+      },
+      {
+        "name": "intro_text_marginal",
+        "context": {
+          "top_nav": {
+            "title": "Confirm SeedQR?",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "text": "Scan your transcribed SeedQR to confirm it was copied correctly.",
+          "button_list": [
+            "Scan",
+            "Skip",
+            "Done"
+          ]
+        }
+      },
+      {
         "name": "left_aligned",
         "context": {
           "top_nav": {
@@ -156,6 +192,29 @@
             "Nested SegWit",
             "Taproot",
             "Legacy"
+          ]
+        }
+      },
+      {
+        "name": "checkbox_multi_restore",
+        "context": {
+          "top_nav": {
+            "title": "Script Types",
+            "show_back_button": true,
+            "show_power_button": false
+          },
+          "text": "Select which script types to enable.",
+          "button_style": "checkbox",
+          "checked_buttons": [0, 3, 5],
+          "initial_selected_index": 5,
+          "button_list": [
+            "Native SegWit",
+            "Nested SegWit",
+            "Taproot",
+            "Legacy",
+            "Custom derivation",
+            "Coordinator default",
+            "Advanced override"
           ]
         }
       },

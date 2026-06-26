@@ -67,6 +67,18 @@ case "$COMMAND" in
     python3 tools/apps/screenshot_generator/gen_gallery.py --out "$OUT" --gen-bin "$GEN"
     ;;
 
+  build-fontpacks)
+    # Generate the per-locale font packs under lang-packs/ — the runtime locale
+    # assets that on-device locale loading and the headless runner_core dedup test
+    # require. Builds ONLY the packs (not the screenshot gallery). screenshot_gen
+    # supplies the --dump-locales font manifest (build it first via build-screenshots);
+    # build_fontpacks builds the lv_shape shaper on demand for complex-script
+    # (Arabic / Persian / Indic) packs. Usage: ci.sh build-fontpacks [GEN_BIN]
+    GEN="${1:-tools/apps/screenshot_generator/build/screenshot_gen}"
+    python3 -c "import fontTools" 2>/dev/null || pip3 install --quiet --disable-pip-version-check fonttools
+    python3 tools/i18n/build_fontpacks.py --gen-bin "$GEN"
+    ;;
+
   compare-screenshots)
     python3 tools/apps/screenshot_generator/compare_screenshots.py "$@"
     ;;
@@ -157,10 +169,15 @@ PY
   # ---------------------------------------------------------------------------
 
   install-runner-core-test-deps)
-    # The test is SDL-free and renders into an RGB565 buffer, so it needs only a
-    # compiler + cmake — no SDL, libpng, or imagemagick.
+    # The runner_core test loads real per-locale font packs (lang-packs/) to exercise
+    # the font dedup + retire/reap lifecycle across scripts, so the job builds those
+    # packs first (see build-fontpacks). That needs the i18n toolchain (PyICU +
+    # fontTools + HarfBuzz) plus the build deps for screenshot_gen (libpng) and the
+    # lv_shape shaper (cmake + compiler). PyICU comes from apt — it ships no wheels, so
+    # `pip install PyICU` would compile from source (>20 min wedge); the rest ship wheels.
     $SUDO apt-get update
-    $SUDO apt-get install -y cmake build-essential
+    $SUDO apt-get install -y cmake build-essential libpng-dev python3 python3-pip python3-icu
+    grep -viE '^pyicu' tools/i18n/requirements.txt | pip3 install --quiet --disable-pip-version-check -r /dev/stdin
     ;;
 
   test-runner-core)
@@ -323,7 +340,8 @@ else:
     echo "  package-web-runner [DIR]         Copy the single-file bundle into a deploy dir"
     echo ""
     echo "Headless test commands:"
-    echo "  install-runner-core-test-deps    Install runner_core test dependencies (cmake + compiler)"
+    echo "  install-runner-core-test-deps    Install runner_core test deps (build + i18n font-pack toolchain)"
+    echo "  build-fontpacks [GEN_BIN]        Build per-locale font packs (lang-packs/) only (no gallery)"
     echo "  test-runner-core [SCENARIOS]     Build and run the headless runner_core smoke test"
     echo ""
     echo "Pages commands:"

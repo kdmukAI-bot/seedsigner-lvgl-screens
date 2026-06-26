@@ -24,5 +24,15 @@ jobs:
       - name: Install dependencies
         run: scripts/ci/ci.sh install-runner-core-test-deps
 
+      # The test loads real per-locale font packs (zh/hi/ru ...) to verify the font
+      # dedup + retire/reap lifecycle across scripts, so build them first. Full
+      # language support is a core requirement of these screens — the locale cases
+      # are exercised in CI, never skipped. (build-screenshots provides the
+      # screenshot_gen binary that build-fontpacks needs for --dump-locales.)
+      - name: Build per-locale font packs (lang-packs/)
+        run: |
+          scripts/ci/ci.sh build-screenshots
+          scripts/ci/ci.sh build-fontpacks
+
       - name: Build and run headless runner_core test
         run: scripts/ci/ci.sh test-runner-core

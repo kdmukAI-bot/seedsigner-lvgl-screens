@@ -693,10 +693,14 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
 }
 
 
+// Forward decl: tight body line-spacing helper (defined after tight_line_space).
+static void apply_body_tight_line_spacing(lv_obj_t *label);
+
 // Create a standard wrapped body-text label in `parent`: WRAP, fixed `width`,
 // centered, BODY_FONT in BODY_FONT_COLOR. Shared by the button_list_screen intro
-// text and the status-screen body (which then layers on its inset width, tight
-// line spacing, and centering). Caller owns any further styling.
+// text and the status-screen body (which then layer on tight line spacing via
+// apply_body_tight_line_spacing(), plus any inset width / centering). Caller owns
+// any further styling.
 static lv_obj_t *make_body_text_label(lv_obj_t *parent, const char *text, int32_t width) {
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
@@ -733,12 +737,17 @@ void button_list_screen(void *ctx_json)
     // Optional intro text above the buttons. The scaffold gave us a separate
     // upper_body (Mode 4) whenever cfg["text"] is a non-empty string; render the
     // text into it. Wraps to the upper_body content width and uses the standard
-    // body font/color; line spacing is the screen's inherited default.
+    // body font/color, with the SAME tight, ink-based line spacing as the
+    // large_icon_status_screen body (not the screen-wide loose default) — otherwise
+    // the taller block can tip a short prompt into a marginal overflow that wrongly
+    // trips scroll-then-buttons, leaving no button highlighted on load.
     if (cfg.contains("text") && cfg["text"].is_string()) {
         std::string text = cfg["text"].get<std::string>();
         if (!text.empty() && screen.upper_body && screen.upper_body != screen.body) {
-            make_body_text_label(screen.upper_body, text.c_str(),
-                                 lv_obj_get_content_width(screen.upper_body));
+            lv_obj_t *intro_label = make_body_text_label(
+                screen.upper_body, text.c_str(),
+                lv_obj_get_content_width(screen.upper_body));
+            apply_body_tight_line_spacing(intro_label);
         }
     }
 
@@ -748,7 +757,11 @@ void button_list_screen(void *ctx_json)
         screen.button_list_count > 0 ? screen.button_list : NULL,
         screen.button_list_count,
         NAV_BODY_VERTICAL,
-        (size_t)-1
+        // Default to button index 0 selected when nothing is passed in (an explicit
+        // initial_selected_index still overrides). A concrete index keeps a button
+        // active even when intro text makes the list overflow — a menu/list always
+        // has a selection. (cf. status screens, which pass NAV_INDEX_NONE.)
+        0
     );
 
     load_screen_and_cleanup_previous(screen.screen);
@@ -999,6 +1012,33 @@ static int32_t tight_line_space(const lv_font_t *font, const char *text, int32_t
     return space;
 }
 
+// Apply the status-screen body's tight, ink-based inter-line spacing to an already-
+// created body-text label: zero top margin + a per-line advance derived from THIS
+// label's real glyph ink (max ascender + max descender + a small profile-scaled
+// gap) via tight_line_space(), rather than the font's loose declared line_height.
+//
+// Shared by the large_icon_status_screen body and the button_list_screen intro
+// text so both render identically and match the PIL reference. Measures the label's
+// STORED text so Arabic/Persian presentation forms (what's actually drawn) are what
+// we measure. Without this the intro text inherits the screen-wide (loose)
+// BODY_LINE_SPACING, whose taller block can tip a short prompt into a marginal
+// overflow — wrongly tripping scroll-then-buttons so no button is highlighted on
+// load.
+static void apply_body_tight_line_spacing(lv_obj_t *label) {
+    if (!label) {
+        return;
+    }
+    // Python places the body immediately after the headline (no extra gap) — so no
+    // top margin; a margin made the headline->body gap visibly looser than Python.
+    lv_obj_set_style_margin_top(label, 0, LV_PART_MAIN);
+
+    int32_t line_gap = LIST_ITEM_PADDING / 2;
+    lv_obj_set_style_text_line_space(
+        label,
+        tight_line_space(&BODY_FONT, lv_label_get_text(label), line_gap),
+        LV_PART_MAIN);
+}
+
 // Empty vertical space between a label's box top and the VISIBLE top of its text
 // — the font's ascent minus the text's real ink ascent. LVGL anchors text by the
 // font's ascent (which includes leading above the caps); PIL/Python anchors the
@@ -1204,27 +1244,11 @@ void large_icon_status_screen(void *ctx_json) {
 
             body_label = make_body_text_label(screen.upper_body, text.c_str(), text_width);
 
-            // Python places the body immediately after the headline
-            // (body_top = headline_bottom; no extra gap) — so NO top margin here.
-            // A CP/2 margin (as before) made the headline->body gap visibly looser
-            // than the Python reference.
-            lv_obj_set_style_margin_top(body_label, 0, LV_PART_MAIN);
-
-            // Tight, ink-based inter-line spacing (see tight_line_space): derive
-            // the line advance from THIS text's real glyph ink extents (max
-            // ascender + max descender) plus a tiny gap, rather than the font's
-            // loose declared line_height. Matches the PIL reference and tames
-            // scripts whose font metrics over-reserve vertical space (Farsi).
-            // The gap is intentionally small and profile-scaled.
-            // As with the headline above, measure the label's STORED text so the
-            // Arabic/Persian presentation forms (what's actually drawn) are what we
-            // measure — measuring the logical codepoints under-counts the ink and
-            // pins fa to NotoSansAR's over-reserved declared line_height (too loose).
-            int32_t line_gap = LIST_ITEM_PADDING / 2;
-            lv_obj_set_style_text_line_space(
-                body_label,
-                tight_line_space(&BODY_FONT, lv_label_get_text(body_label), line_gap),
-                LV_PART_MAIN);
+            // Zero top margin (Python places the body immediately after the
+            // headline) + tight, ink-based inter-line spacing matching the PIL
+            // reference — both applied by apply_body_tight_line_spacing(), shared
+            // with the button_list_screen intro text so the two render identically.
+            apply_body_tight_line_spacing(body_label);
         }
     }
 
@@ -1373,7 +1397,10 @@ void large_icon_status_screen(void *ctx_json) {
         screen.button_list_count > 0 ? screen.button_list : NULL,
         screen.button_list_count,
         NAV_BODY_VERTICAL,
-        0
+        // NAV_INDEX_NONE: the single OK/ack button is active when the screen FITS, but
+        // when a long warning overflows the user must scroll through it before the
+        // button becomes selectable (read-first). It is NOT pre-focused under overflow.
+        NAV_INDEX_NONE
     );
 
     load_screen_and_cleanup_previous(screen.screen);

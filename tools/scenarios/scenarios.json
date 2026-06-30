@@ -542,5 +542,42 @@
         }
       }
     ]
+  },
+  "seed_mnemonic_entry_screen": {
+    "context": {
+      "top_nav": {"title": "Seed Word #1", "show_back_button": true, "show_power_button": false},
+      "wordlist": ["abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd", "abuse", "access", "accident", "account", "accuse", "cabin", "cable", "cactus", "cage", "cake", "call", "muffin", "mule", "multiply", "muscle", "museum", "mushroom", "music", "must", "mutual", "myself", "mystery", "myth", "navy", "near", "neck", "need", "negative", "oak", "obey", "object"]
+    },
+    "variations": [
+      {
+        "name": "partial",
+        "context": {
+          "top_nav": {"title": "Seed Word #3"},
+          "initial_letters": "mu"
+        }
+      },
+      {
+        "name": "narrowed",
+        "context": {
+          "top_nav": {"title": "Seed Word #7"},
+          "initial_letters": "mus"
+        }
+      },
+      {
+        "name": "single_match",
+        "context": {
+          "top_nav": {"title": "Seed Word #12"},
+          "initial_letters": "mush"
+        }
+      },
+      {
+        "name": "word_selected",
+        "context": {
+          "top_nav": {"title": "Seed Word #5"},
+          "initial_letters": "mu",
+          "initial_selected_word": "muscle"
+        }
+      }
+    ]
   }
 }

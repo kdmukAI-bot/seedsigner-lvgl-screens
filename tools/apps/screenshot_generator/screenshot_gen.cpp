@@ -74,6 +74,7 @@ static const std::unordered_map<std::string, screen_fn_t> k_screen_registry = {
     {"seed_add_passphrase_screen", seed_add_passphrase_screen},
     {"camera_preview_overlay_screen", camera_preview_overlay_screen},
     {"keyboard_screen", keyboard_screen},
+    {"seed_mnemonic_entry_screen", seed_mnemonic_entry_screen},
 };
 
 static screen_fn_t lookup_screen_fn(const std::string &name) {

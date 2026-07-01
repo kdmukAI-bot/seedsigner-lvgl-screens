@@ -28,6 +28,7 @@
 #include "seedsigner.h"
 #include "input_profile.h"
 #include "shape_spike.h"
+#include "panel_sim.h"  // Pi Zero panel-falloff LUT (--panel-gamma)
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -300,15 +301,18 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 
 static int framebuffer_to_rgb24(std::vector<uint8_t> &rgb) {
     rgb.resize((size_t)g_width * (size_t)g_height * 3u);
+    // Pi Zero panel-falloff simulation: identity table unless --panel-gamma was given,
+    // so this is a 1:1 passthrough by default (see panel_sim.h).
+    const uint8_t *lut = panel_sim::lut();
     for (int y = 0; y < g_height; ++y) {
         for (int x = 0; x < g_width; ++x) {
             size_t si = (size_t)y * (size_t)g_width + (size_t)x;
             size_t di = si * 3u;
-            // Convert RGB565 to RGB888
+            // Convert RGB565 to RGB888, mapping each channel through the panel LUT.
             uint16_t c = g_fb[si];
-            rgb[di + 0] = (uint8_t)((c >> 11) << 3);          // R
-            rgb[di + 1] = (uint8_t)(((c >> 5) & 0x3F) << 2);  // G
-            rgb[di + 2] = (uint8_t)((c & 0x1F) << 3);         // B
+            rgb[di + 0] = lut[(uint8_t)((c >> 11) << 3)];          // R
+            rgb[di + 1] = lut[(uint8_t)(((c >> 5) & 0x3F) << 2)];  // G
+            rgb[di + 2] = lut[(uint8_t)((c & 0x1F) << 3)];         // B
         }
     }
     return 0;
@@ -472,6 +476,13 @@ static void usage(const char *argv0) {
     printf("Usage: %s [options]\n", argv0);
     printf("  --out-dir <path>      Output dir (default: %s)\n", DEFAULT_OUT_DIR);
     printf("  --scenarios-file <path>  Scenario config file (default: %s)\n", DEFAULT_SCENARIOS_FILE);
+    printf("  --panel-gamma <float>  Simulate the Pi Zero ST7789 panel falloff:\n");
+    printf("                         per-channel gamma applied to the output (>1 darkens\n");
+    printf("                         AA mid-tones; 1.0 = off). Range [0.5, 4.0].\n");
+    printf("  --body-ssaa            Option B: 2x supersample+sharpen the body label\n");
+    printf("                         (240 profile, Latin only). Buttons stay native.\n");
+    printf("  --ss-sharpen <float>   Body SSAA unsharp strength (default 1.0 = PIL SHARPEN;\n");
+    printf("                         0 = box downscale only). Implies --body-ssaa.\n");
     printf("\nSupported resolutions (%d):\n", display_profile_count());
     for (int i = 0; i < display_profile_count(); ++i) {
         const DisplayProfile &p = display_profile_at(i);
@@ -512,6 +523,9 @@ int main(int argc, char **argv) {
     const char *shape_spike_dir = NULL;  // --shape-spike: run the throwaway shaping spike and exit
     std::string locale;     // --locale: register per-locale fonts + (caller picks scenarios file)
     std::string font_dir = "lang-packs";  // --font-dir (repo-root production packs)
+    float panel_gamma = 1.0f;  // --panel-gamma: 1.0 = off (identity); >1 simulates panel falloff
+    bool  body_ssaa = false;         // --body-ssaa: 2x supersample+sharpen body (Option B)
+    float body_ssaa_sharpen = 1.0f;  // --ss-sharpen: unsharp strength (0 = box only)
 
     // Need an active profile before usage() can call display_profile_count()
     set_display(DISPLAY_WIDTH, DISPLAY_HEIGHT);
@@ -521,6 +535,21 @@ int main(int argc, char **argv) {
             out_dir = argv[++i];
         } else if (strcmp(argv[i], "--scenarios-file") == 0 && i + 1 < argc) {
             scenarios_file = argv[++i];
+        } else if (strcmp(argv[i], "--panel-gamma") == 0 && i + 1 < argc) {
+            panel_gamma = (float)atof(argv[++i]);
+            if (panel_gamma < 0.5f || panel_gamma > 4.0f) {
+                fprintf(stderr, "--panel-gamma must be in range [0.5, 4.0]\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--body-ssaa") == 0) {
+            body_ssaa = true;
+        } else if (strcmp(argv[i], "--ss-sharpen") == 0 && i + 1 < argc) {
+            body_ssaa = true;
+            body_ssaa_sharpen = (float)atof(argv[++i]);
+            if (body_ssaa_sharpen < 0.0f || body_ssaa_sharpen > 4.0f) {
+                fprintf(stderr, "--ss-sharpen must be in range [0.0, 4.0]\n");
+                return 1;
+            }
         } else if (strcmp(argv[i], "--dump-locales") == 0) {
             dump_locales = true;
         } else if (strcmp(argv[i], "--shape-spike") == 0 && i + 1 < argc) {
@@ -537,6 +566,9 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
+
+    // Arm the Pi Zero panel-falloff simulation (no-op identity LUT when gamma == 1).
+    panel_sim::set_params(panel_gamma != 1.0f, panel_gamma);
 
     // Emit the canonical per-profile font manifest (the render layer's sole
     // outward interface) and exit. The offline font-pack tooling consumes this
@@ -603,6 +635,11 @@ int main(int argc, char **argv) {
     }
 
     lv_init();
+
+    // Option B body supersampling: enabled at build time; each body label
+    // oversamples itself at render (240 profile, Latin). No-op when off.
+    seedsigner_set_body_supersample(body_ssaa);
+    seedsigner_set_body_sharpen(body_ssaa_sharpen);
 
     // Static screenshots: disable animations (e.g. the text-entry cursor blink)
     // so each frame is deterministic and the cursor is always captured.

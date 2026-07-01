@@ -1,6 +1,7 @@
 #include "runner_sdl.h"
 
 #include "runner_core.h"
+#include "panel_sim.h"  // Pi Zero panel-falloff LUT (identity unless enabled)
 
 #include "lvgl.h"  // LV_KEY_* codes
 
@@ -32,14 +33,19 @@ void blit_framebuffer_to_texture(SDL_Texture* texture) {
     int pitch = 0;
     if (SDL_LockTexture(texture, nullptr, &pixels, &pitch) != 0) return;
 
+    // Pi Zero panel-falloff simulation. `lut` is the identity table unless the web
+    // runner has turned the sim on, so this is a no-op passthrough by default (the
+    // native runner never enables it) — see panel_sim.h.
+    const uint8_t* lut = panel_sim::lut();
+
     for (int y = 0; y < h; ++y) {
         uint32_t* row = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(pixels) + y * pitch);
         for (int x = 0; x < w; ++x) {
-            // RGB565 → ARGB8888.
+            // RGB565 → ARGB8888, with each channel mapped through the panel LUT.
             uint16_t c = fb[static_cast<size_t>(y) * w + x];
-            uint8_t r = static_cast<uint8_t>((c >> 11) << 3);
-            uint8_t g = static_cast<uint8_t>(((c >> 5) & 0x3F) << 2);
-            uint8_t b = static_cast<uint8_t>((c & 0x1F) << 3);
+            uint8_t r = lut[static_cast<uint8_t>((c >> 11) << 3)];
+            uint8_t g = lut[static_cast<uint8_t>(((c >> 5) & 0x3F) << 2)];
+            uint8_t b = lut[static_cast<uint8_t>((c & 0x1F) << 3)];
             row[x] = 0xFF000000u | (static_cast<uint32_t>(r) << 16) |
                      (static_cast<uint32_t>(g) << 8) | b;
         }

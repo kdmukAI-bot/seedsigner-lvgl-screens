@@ -101,6 +101,16 @@ void lv_seedsigner_screen_close(void);
 // blinking). Intended for the screenshot generator; off by default for live use.
 void seedsigner_lvgl_set_static_render(bool enabled);
 
+// Per-label body-text supersampling (Option B, docs/font-low-dpi-supersampling-plan.md):
+// render the wrapped body label at 2× and downscale + unsharp for crisper body text
+// on the low-DPI Pi Zero panel. BODY role only — titles/buttons stay native, so the
+// sharpen never rings the high-contrast buttons. Runtime A/B for in-tool evaluation;
+// OFF by default; only takes effect at the 240-height profile and Latin (non-shaped)
+// locales. Re-render the current screen after toggling. `amount`: 0 = box downscale
+// only (no sharpen), 1 = PIL SHARPEN strength, >1 over-sharpens.
+void seedsigner_set_body_supersample(bool enabled);
+void seedsigner_set_body_sharpen(float amount);
+
 
 #ifdef __cplusplus
 }

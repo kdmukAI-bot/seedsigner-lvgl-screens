@@ -25,6 +25,7 @@
 
 #include "runner_core.h"
 #include "runner_sdl.h"
+#include "panel_sim.h"  // Pi Zero panel-falloff simulation (ss_set_panel_sim)
 
 #include <nlohmann/json.hpp>
 
@@ -176,6 +177,24 @@ EMSCRIPTEN_KEEPALIVE void ss_send_key(int lv_key) {
 // Wired to mouse-wheel / two-finger scroll in the page.
 EMSCRIPTEN_KEEPALIVE void ss_scroll(int dy) {
     runner_core::scroll_active(dy);
+}
+
+// Pi Zero panel-falloff simulation toggle/strength. `enabled` 0/1; `gamma` is the
+// per-channel exponent (>1 darkens AA mid-tones toward the background, simulating the
+// ST7789's steep intensity falloff). The change is picked up by the next frame's blit
+// (the main loop re-blits every frame), so no explicit redraw is needed here.
+EMSCRIPTEN_KEEPALIVE void ss_set_panel_sim(int enabled, double gamma) {
+    panel_sim::set_params(enabled != 0, static_cast<float>(gamma));
+}
+
+// Body-text supersampling (Option B) A/B toggle + sharpen strength. Sets the screen-
+// layer flags; the JS host re-renders the current screen so make_body_text_label
+// re-runs and (re)bakes the oversampled body image. 240-profile + Latin only.
+EMSCRIPTEN_KEEPALIVE void ss_set_body_ssaa(int enabled) {
+    seedsigner_set_body_supersample(enabled != 0);
+}
+EMSCRIPTEN_KEEPALIVE void ss_set_ss_sharpen(double amount) {
+    seedsigner_set_body_sharpen(static_cast<float>(amount));
 }
 
 EMSCRIPTEN_KEEPALIVE int ss_get_width()  { return runner_core::width(); }

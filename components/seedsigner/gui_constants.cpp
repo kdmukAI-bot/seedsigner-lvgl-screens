@@ -280,6 +280,50 @@ static bool baseline_installed(const DisplayProfile* p) {
     return false;
 }
 
+// Process-wide cache of rasterized Western baseline instances, keyed by
+// (semibold, px). The baseline fonts are process-lifetime and never destroyed, so
+// caching here means each distinct (weight, px) is built at most once — across
+// profiles that share a px, and it also serves the per-label body supersampler's
+// 2× (34 px) font request via seedsigner_western_font().
+struct WesternInstance { bool semibold; int px; lv_font_t* font; };
+static WesternInstance g_western_cache[64];
+static int g_western_cache_count = 0;
+
+static lv_font_t* western_instance(bool semibold, int px) {
+    for (int i = 0; i < g_western_cache_count; ++i) {
+        if (g_western_cache[i].semibold == semibold && g_western_cache[i].px == px) {
+            return g_western_cache[i].font;
+        }
+    }
+
+    const uint8_t* data = semibold ? opensans_western_semibold_ttf
+                                   : opensans_western_regular_ttf;
+    const size_t   len  = semibold ? opensans_western_semibold_ttf_len
+                                   : opensans_western_regular_ttf_len;
+
+    // KERNING_NONE: our closed label corpus doesn't need pair kerning.
+    // Cache size = SEEDSIGNER_TTF_CACHE_SIZE (gui_constants.h): enabled by default.
+    // The cache retains bitmaps, so every target must back LVGL with adequate
+    // RAM/PSRAM; against a too-small fixed pool it OOMs (→ assert-handler spin).
+    // See docs/knowledge/tiny-ttf-cache-spin-root-cause.md.
+    lv_font_t* f = lv_tiny_ttf_create_data_ex(data, len, px,
+                                              LV_FONT_KERNING_NONE,
+                                              SEEDSIGNER_TTF_CACHE_SIZE);
+    if (!f) {
+        fprintf(stderr, "FATAL: failed to rasterize OpenSans Western baseline "
+                        "(semibold=%d px=%d)\n", (int)semibold, px);
+        abort();
+    }
+    if (g_western_cache_count <
+        (int)(sizeof(g_western_cache) / sizeof(g_western_cache[0]))) {
+        g_western_cache[g_western_cache_count++] = {semibold, px, f};
+    }
+    return f;
+}
+
+// Assign the five translated text roles their OpenSans Western baseline fonts at
+// each role's scaled px. Idempotent for a given profile. Colliding (weight, px)
+// roles share an instance via western_instance()'s process-wide cache.
 static void install_western_baseline(DisplayProfile& p) {
     if (baseline_installed(&p)) return;
 
@@ -301,57 +345,14 @@ static void install_western_baseline(DisplayProfile& p) {
         { &DisplayProfile::body_font,            17,                false },
     };
 
-    // Multiple roles can resolve to the same (weight, px) after scaling — e.g.
-    // top_nav_title and large_button both land on 20 px SemiBold at the 240-height
-    // profile; button and large_button on 23 px at 320. tiny_ttf would rasterize a
-    // byte-identical font for each, and every instance carries its own set of glyph
-    // caches on the constrained internal pool. So create one instance per distinct
-    // (semibold, px) and point colliding roles at the shared font. These baseline
-    // fonts are process-lifetime and never destroyed, so sharing here is purely
-    // "don't build the duplicate" — no lifecycle bookkeeping needed.
-    struct Created { int px; bool semibold; lv_font_t* font; };
-    Created created[sizeof(roles) / sizeof(roles[0])];
-    int created_count = 0;
-
     for (const RoleSpec& r : roles) {
         const int px = px_scale(r.base_size, mult);
-
-        // Reuse an instance already built for this (semibold, px) in this profile.
-        lv_font_t* f = nullptr;
-        for (int i = 0; i < created_count; ++i) {
-            if (created[i].px == px && created[i].semibold == r.semibold) {
-                f = created[i].font;
-                break;
-            }
-        }
-
-        if (!f) {
-            const uint8_t* data = r.semibold ? opensans_western_semibold_ttf
-                                             : opensans_western_regular_ttf;
-            const size_t   len  = r.semibold ? opensans_western_semibold_ttf_len
-                                             : opensans_western_regular_ttf_len;
-
-            // KERNING_NONE: our closed label corpus doesn't need pair kerning.
-            // Cache size = SEEDSIGNER_TTF_CACHE_SIZE (gui_constants.h): enabled by
-            // default. The cache retains bitmaps, so every target must back LVGL with
-            // adequate RAM/PSRAM; against a too-small fixed pool it OOMs (→ assert-
-            // handler spin). See docs/knowledge/tiny-ttf-cache-spin-root-cause.md.
-            f = lv_tiny_ttf_create_data_ex(data, len, px,
-                                           LV_FONT_KERNING_NONE,
-                                           SEEDSIGNER_TTF_CACHE_SIZE);
-            if (!f) {
-                fprintf(stderr, "FATAL: failed to rasterize OpenSans Western baseline "
-                                "(role px=%d)\n", px);
-                abort();
-            }
-            created[created_count++] = {px, r.semibold, f};
-        }
-
-        p.*(r.field) = f;
+        p.*(r.field) = western_instance(r.semibold, px);
     }
 
-    if (g_baseline_installed_count <
-        (int)(sizeof(g_baseline_installed) / sizeof(g_baseline_installed[0]))) {
+    if (!baseline_installed(&p) &&
+        g_baseline_installed_count <
+            (int)(sizeof(g_baseline_installed) / sizeof(g_baseline_installed[0]))) {
         g_baseline_installed[g_baseline_installed_count++] = &p;
     }
 }
@@ -375,6 +376,18 @@ void set_display(int width, int height) {
     if (lv_is_initialized()) {
         install_western_baseline(*p);
     }
+#endif
+}
+
+const lv_font_t* seedsigner_western_font(bool semibold, int px) {
+#if LV_USE_TINY_TTF
+    if (px <= 0) return nullptr;
+    // Reuses the process-wide (weight, px) cache the baseline install uses, so an
+    // oversample font (e.g. the 34 px = 2× body twin) is built at most once.
+    return western_instance(semibold, px);
+#else
+    (void)semibold; (void)px;
+    return nullptr;
 #endif
 }
 

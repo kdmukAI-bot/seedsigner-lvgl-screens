@@ -160,6 +160,8 @@ set(SEEDSIGNER_CORE_SOURCES
 set(RUNNER_COMMON_SOURCES
   "${COMMON_DIR}/runner_core.cpp"
   "${COMMON_DIR}/runner_sdl.cpp"
+  # Pi Zero panel-falloff LUT (referenced by runner_sdl's blit; identity unless enabled).
+  "${COMMON_DIR}/panel_sim.cpp"
 )
 
 set(SCREEN_RUNNER_SOURCE

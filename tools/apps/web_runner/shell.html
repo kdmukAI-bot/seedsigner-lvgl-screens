@@ -202,6 +202,28 @@
             <option value="4">4×</option>
           </select>
         </label>
+        <!-- Pi-Zero-only controls: panel-falloff sim (gamma LUT that mimics how the real
+             240×240 ST7789 crushes AA gray pixels) + body SSAA (Option B). Grouped in one
+             flex box so they stay together on a line, and shown only for 240-height
+             profiles (updatePi0Controls) since that's where they take effect. -->
+        <div id="pi0-controls" style="display:flex; gap:14px; align-items:center;">
+          <label title="Simulate the Pi Zero ST7789 panel's intensity falloff (crushes AA gray pixels). 240-height profiles only.">
+            <input type="checkbox" id="panel-sim-toggle"> Pi Zero panel
+          </label>
+          <label title="Panel falloff strength (per-channel gamma). Higher = AA edges fade further toward the background.">γ
+            <input type="range" id="panel-gamma" min="1" max="3.5" step="0.1" value="2.4"
+                   style="vertical-align:middle; width:90px;">
+            <span id="panel-gamma-val">2.4</span>
+          </label>
+          <label title="Option B: 2× supersample + sharpen the body text only (buttons untouched), to recover thin body on the Pi Zero panel. 240-height + Latin only.">
+            <input type="checkbox" id="body-ssaa-toggle"> Body SSAA (240)
+          </label>
+          <label title="Body SSAA unsharp strength: 0 = downscale only (no sharpen), 1 = PIL SHARPEN, >1 over-sharpens.">sharp
+            <input type="range" id="ss-sharpen" min="0" max="2" step="0.1" value="1.0"
+                   style="vertical-align:middle; width:80px;">
+            <span id="ss-sharpen-val">1.0</span>
+          </label>
+        </div>
       </div>
       <button id="fs-btn">Fullscreen</button>
     </div>
@@ -330,6 +352,8 @@
     return {
       lang: p.get('lang'), screen: p.get('screen'), scenario: p.get('scenario'),
       res: p.get('res'), mode: p.get('mode'), zoom: p.get('zoom'),
+      panel: p.get('panel'),
+      bssaa: p.get('bssaa'), sharp: p.get('sharp'),
     };
   }
 
@@ -341,6 +365,9 @@
     app.setInputMode  = Module.cwrap('ss_set_input_mode', null, ['number']);
     app.sendKey       = Module.cwrap('ss_send_key', null, ['number']);
     app.scroll        = Module.cwrap('ss_scroll', null, ['number']);
+    app.setPanelSim   = Module.cwrap('ss_set_panel_sim', null, ['number', 'number']);
+    app.setBodySsaa   = Module.cwrap('ss_set_body_ssaa', null, ['number']);
+    app.setSsSharpen  = Module.cwrap('ss_set_ss_sharpen', null, ['number']);
     // Locale packs (option B): the shared loader tells us which files to fetch
     // (ss_pack_files); JS stages each fetched blob (ss_stage_blob) then calls
     // ss_load_staged once to drive the same loader every host uses.
@@ -426,6 +453,13 @@
     var localeSel = document.getElementById('locale-select');
     var resSel    = document.getElementById('res-select');
     var zoomSel   = document.getElementById('zoom-select');
+    var panelToggle   = document.getElementById('panel-sim-toggle');
+    var panelGamma    = document.getElementById('panel-gamma');
+    var panelGammaVal = document.getElementById('panel-gamma-val');
+    var ssaaToggle    = document.getElementById('body-ssaa-toggle');
+    var ssSharpen     = document.getElementById('ss-sharpen');
+    var ssSharpenVal  = document.getElementById('ss-sharpen-val');
+    var pi0Controls   = document.getElementById('pi0-controls');
     var canvas    = document.getElementById('canvas');
     var catalog   = {};   // expanded catalog for the active locale (loaded async)
     var fontCache = {};   // 'locale/file' -> Uint8Array; lets re-register skip re-fetch
@@ -481,6 +515,16 @@
       document.getElementById('sidekeys').classList.toggle('hidden', app.isTouch);
       relayout();
     }
+    // Push the Pi Zero panel-sim toggle/slider state down to the renderer and refresh
+    // the gamma readout. The next frame's blit applies the new LUT (the main loop
+    // re-blits every frame), so there's nothing to redraw here.
+    function applyPanelSim() {
+      var on = panelToggle.checked;
+      var g = parseFloat(panelGamma.value) || 1.0;
+      panelGammaVal.textContent = g.toFixed(1);
+      panelGamma.disabled = !on;
+      if (app.setPanelSim) app.setPanelSim(on ? 1 : 0, g);
+    }
 
     // ---- Deep-link state ----
     function currentScenarioName() {
@@ -506,6 +550,9 @@
       if (resSel.value)     p.set('res', resSel.value);
       if (modeSel.value)    p.set('mode', modeSel.value);
       if (zoomSel.value)    p.set('zoom', zoomSel.value);
+      // Only persist the panel sim when it's on (off = default), so the URL stays tidy.
+      if (panelToggle.checked) p.set('panel', parseFloat(panelGamma.value).toFixed(1));
+      if (ssaaToggle.checked) { p.set('bssaa', '1'); p.set('sharp', parseFloat(ssSharpen.value).toFixed(1)); }
       window.history.replaceState(null, '', window.location.pathname + '?' + p.toString());
     }
     // Restore resolution / input mode / zoom from deep-link state BEFORE fonts load
@@ -528,6 +575,20 @@
         var z = parseInt(state.zoom, 10);
         if (z >= 1 && z <= 4) { zoomSel.value = String(z); app.zoom = z; }
       }
+      // Restore the panel sim (presence of the param = enabled; value = gamma) +
+      // body-SSAA flag + sharpen before the first render.
+      if (state.panel) {
+        var pg = parseFloat(state.panel);
+        if (pg >= 1 && pg <= 3.5) { panelToggle.checked = true; panelGamma.value = String(pg); }
+      }
+      if (state.sharp != null) {
+        var sh = parseFloat(state.sharp);
+        if (sh >= 0 && sh <= 2) ssSharpen.value = String(sh);
+      }
+      if (state.bssaa === '1') { ssaaToggle.checked = true; }
+      // Apply (or hide + force-off, above 240 height) the Pi-Zero controls per the
+      // restored resolution.
+      updatePi0Controls();
       updateControlsVisibility();
     }
 
@@ -636,6 +697,9 @@
     resSel.addEventListener('change', function () {
       var p = this.value.split('x');
       app.setResolution(parseInt(p[0], 10), parseInt(p[1], 10));
+      // Show/hide + apply-or-disable the Pi-Zero controls for the new height BEFORE
+      // the re-render below, so the SSAA flag is right when the screen rebuilds.
+      updatePi0Controls();
       // Font px is per-resolution, so re-register the locale's packs, then render.
       applyLocaleFonts(app.locale).then(applyEditor);
       updateUrl();
@@ -649,6 +713,50 @@
       app.zoom = parseInt(this.value, 10); relayout();
       updateUrl();
     });
+    // Pi Zero panel sim: toggle on/off, and live-drag the gamma slider. Apply on every
+    // 'input' (so dragging updates the canvas immediately); persist the URL on 'change'
+    // (slider release / checkbox flip) to avoid a replaceState per slider pixel.
+    panelToggle.addEventListener('change', function () { applyPanelSim(); updateUrl(); });
+    panelGamma.addEventListener('input',  function () { applyPanelSim(); });
+    panelGamma.addEventListener('change', function () { updateUrl(); });
+    // Body weight-bump A/B (Option A). Flip the baseline weight on the C side, then
+    // re-register the locale's fonts over the refreshed baseline and re-render —
+    // same sequence the resolution change uses, so it's correct for any locale.
+    // Body SSAA (Option B): set the flag/sharpen on the C side, then re-render the
+    // current screen so the body label re-bakes its oversampled image. Sharpen is
+    // applied on 'change' (release) — each apply rebuilds the screen, so we don't
+    // want that per slider pixel; 'input' just updates the readout.
+    function applyBodySsaa() {
+      var s = parseFloat(ssSharpen.value);
+      ssSharpenVal.textContent = s.toFixed(1);
+      ssSharpen.disabled = !ssaaToggle.checked;
+      app.setSsSharpen(s);
+      app.setBodySsaa(ssaaToggle.checked ? 1 : 0);
+    }
+    ssaaToggle.addEventListener('change', function () { applyBodySsaa(); applyEditor(); updateUrl(); });
+    ssSharpen.addEventListener('input',  function () { ssSharpenVal.textContent = parseFloat(this.value).toFixed(1); });
+    ssSharpen.addEventListener('change', function () { applyBodySsaa(); applyEditor(); updateUrl(); });
+
+    // The panel sim + body SSAA only take effect on 240-height profiles (Pi Zero), so
+    // hide the whole group above 240 and force the effects OFF there (the panel LUT
+    // otherwise applies at any resolution). Their toggle states are preserved and
+    // re-applied when the resolution returns to 240 height. Call after setResolution;
+    // when hiding during a resolution change, the caller re-renders so SSAA drops.
+    function updatePi0Controls() {
+      var parts = (resSel.value || '240x240').split('x');
+      var show = (parseInt(parts[1], 10) || 240) <= 240;
+      // Set display directly: there's no generic `.hidden` rule (only scoped ones like
+      // `.hw-control.hidden`), so classList.toggle('hidden') wouldn't hide this group.
+      // 'flex' restores the inline row layout when shown.
+      pi0Controls.style.display = show ? 'flex' : 'none';
+      if (show) {
+        applyPanelSim();
+        applyBodySsaa();
+      } else {
+        if (app.setPanelSim) app.setPanelSim(0, parseFloat(panelGamma.value));
+        if (app.setBodySsaa) app.setBodySsaa(0);
+      }
+    }
 
     // Fullscreen enter/exit + landscape orientation (best-effort).
     function enterFullscreen() {

@@ -12,6 +12,10 @@
 
 #include "lvgl.h"
 
+// Marks a wrapped body-text label so the post-build supersample pass can find it
+// (LV_OBJ_FLAG_USER_1 is taken by the screensaver — see overlay_manager.h).
+#define SS_OBJ_FLAG_BODY_SSAA LV_OBJ_FLAG_USER_2
+
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
@@ -126,6 +130,10 @@ static void apply_rtl_text_to_labels(lv_obj_t *obj) {
     }
 }
 
+// Latin body supersampling post-build pass (defined far below, after the line-spacing
+// helpers). No-op unless enabled + 240 profile + a non-shaped locale.
+static void apply_body_supersample_to_labels(lv_obj_t *obj);
+
 static void load_screen_and_cleanup_previous(lv_obj_t *new_screen) {
     // Global RTL hook: flip text direction on the finished screen's labels for
     // RTL locales (layout stays physical; user-input widgets stay LTR).
@@ -140,6 +148,11 @@ static void load_screen_and_cleanup_previous(lv_obj_t *new_screen) {
     // glyph-run word-wrap fits long lines to it.
     lv_obj_update_layout(new_screen);
     apply_glyph_runs_to_labels(new_screen);
+
+    // Latin body supersampling (Option B): runs here, after full layout + balanced
+    // wrap, so it reads each body label's FINAL breaks. Self-gates (enabled / 240 /
+    // non-shaped); a no-op otherwise. Mutually exclusive with glyph_runs above.
+    apply_body_supersample_to_labels(new_screen);
 
     lv_obj_t *old_screen = lv_scr_act();
     lv_scr_load(new_screen);
@@ -700,6 +713,12 @@ static screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool sc
 // Forward decl: tight body line-spacing helper (defined after tight_line_space).
 static void apply_body_tight_line_spacing(lv_obj_t *label);
 
+// Forward decl: per-label body supersampling (Option B). No-op unless enabled +
+// at the 240 profile + a Latin (non-shaped) locale. Run as a post-build pass over
+// the finished screen (load_screen_and_cleanup_previous), AFTER layout + any
+// balanced-wrap width adjustment, so the oversample uses the label's final breaks.
+static void apply_body_supersample_to_labels(lv_obj_t *obj);
+
 // Create a standard wrapped body-text label in `parent`: WRAP, fixed `width`,
 // centered, BODY_FONT in BODY_FONT_COLOR. Shared by the button_list_screen intro
 // text and the status-screen body (which then layer on tight line spacing via
@@ -713,6 +732,9 @@ static lv_obj_t *make_body_text_label(lv_obj_t *parent, const char *text, int32_
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_style_text_color(label, lv_color_hex(BODY_FONT_COLOR), LV_PART_MAIN);
     lv_obj_set_style_text_font(label, &BODY_FONT, LV_PART_MAIN);
+    // Tag for the post-build supersample pass (which reads the label's FINAL wrapped
+    // breaks — after any balanced-wrap width adjustment — so breaks stay identical).
+    lv_obj_add_flag(label, SS_OBJ_FLAG_BODY_SSAA);
     return label;
 }
 
@@ -1042,6 +1064,259 @@ static void apply_body_tight_line_spacing(lv_obj_t *label) {
         tight_line_space(&BODY_FONT, lv_label_get_text(label), line_gap),
         LV_PART_MAIN);
 }
+
+// ---------------------------------------------------------------------------
+// Per-label body-text supersampling (Option B — docs/font-low-dpi-supersampling-plan.md)
+// ---------------------------------------------------------------------------
+// PIL renders body text at 2×, downscales, and applies an unsharp SHARPEN to
+// recover thin strokes on the low-DPI Pi Zero panel — and it does this for the
+// BODY role ONLY (buttons render native, so the sharpen never rings the high-
+// contrast orange buttons). We reproduce exactly that: render the wrapped body
+// label into an offscreen 2× canvas, box-downscale + unsharp, and draw the result
+// over the label with its own text suppressed. Runtime A/B toggle; OFF by default.
+//
+// SCOPE: only ever runs at the 240-height profile (PX_MULTIPLIER_100) — i.e. the
+// Pi Zero — and only for Latin (non-shaped) locales for now (the shaped glyph_runs
+// path for hi/th/ur is a later to-do). The implementation compiles out where
+// LVGL's canvas is disabled (some ESP32 lv_confs), and is a runtime no-op at every
+// other profile/target regardless.
+
+// Runtime A/B state (host toggles these; see seedsigner.h). Defined unconditionally
+// so the setters link on every target even where the canvas is compiled out.
+static bool  g_body_ssaa_enabled = false;
+static float g_body_ssaa_sharpen = 1.0f;  // 0 = box only; 1 = PIL SHARPEN; >1 over-sharpen
+
+void seedsigner_set_body_supersample(bool enabled) { g_body_ssaa_enabled = enabled; }
+void seedsigner_set_body_sharpen(float amount)     { g_body_ssaa_sharpen = amount; }
+
+#if LV_USE_CANVAS
+
+namespace {
+
+// One body label's owned downscaled image, freed on the label's LV_EVENT_DELETE.
+// `pad_x` is the 1× horizontal padding baked into the image on each side (drift
+// headroom); the draw offsets by it so the image stays centred on the label.
+struct BodySSAAImage { lv_draw_buf_t* img; int pad_x; };
+
+inline void ss_unpack565(uint16_t c, int& r, int& g, int& b) {
+    r = (c >> 11) << 3; g = ((c >> 5) & 0x3F) << 2; b = (c & 0x1F) << 3;
+}
+inline uint16_t ss_pack565(int r, int g, int b) {
+    if (r < 0) r = 0; else if (r > 255) r = 255;
+    if (g < 0) g = 0; else if (g > 255) g = 255;
+    if (b < 0) b = 0; else if (b > 255) b = 255;
+    return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+}
+
+// 2×2 box downscale of the RGB565 source (sw×sh, `src_stride` bytes/row) into the
+// RGB565 draw buffer `dst`, then an unsharp pass: out = c + amount·(c − mean8),
+// mean8 = average of the 8 downscaled neighbours (edges replicated). amount 0 =
+// straight box downscale (no sharpen → no ringing).
+void body_ssaa_downscale(const uint8_t* src, int src_stride, int sw, int sh,
+                         lv_draw_buf_t* dst, float amount) {
+    const int dw = sw / 2, dh = sh / 2;
+    std::vector<uint8_t> mid((size_t)dw * dh * 3);  // box-averaged RGB888 (unsharp source)
+
+    for (int dy = 0; dy < dh; ++dy) {
+        const uint16_t* r0 = (const uint16_t*)(src + (size_t)(2 * dy) * src_stride);
+        const uint16_t* r1 = (const uint16_t*)(src + (size_t)(2 * dy + 1) * src_stride);
+        for (int dx = 0; dx < dw; ++dx) {
+            const int sx = 2 * dx;
+            int ar, ag, ab, br, bg, bb, cr, cg, cb, dr, dg, db;
+            ss_unpack565(r0[sx],     ar, ag, ab);
+            ss_unpack565(r0[sx + 1], br, bg, bb);
+            ss_unpack565(r1[sx],     cr, cg, cb);
+            ss_unpack565(r1[sx + 1], dr, dg, db);
+            uint8_t* o = &mid[((size_t)dy * dw + dx) * 3];
+            o[0] = (uint8_t)((ar + br + cr + dr + 2) >> 2);
+            o[1] = (uint8_t)((ag + bg + cg + dg + 2) >> 2);
+            o[2] = (uint8_t)((ab + bb + cb + db + 2) >> 2);
+        }
+    }
+
+    const int dst_stride = dst->header.stride;
+    for (int y = 0; y < dh; ++y) {
+        uint16_t* drow = (uint16_t*)(dst->data + (size_t)y * dst_stride);
+        const int y0 = y > 0 ? y - 1 : 0, y1 = y < dh - 1 ? y + 1 : dh - 1;
+        for (int x = 0; x < dw; ++x) {
+            const uint8_t* c = &mid[((size_t)y * dw + x) * 3];
+            if (amount <= 0.0f) { drow[x] = ss_pack565(c[0], c[1], c[2]); continue; }
+
+            const int x0 = x > 0 ? x - 1 : 0, x1 = x < dw - 1 ? x + 1 : dw - 1;
+            int sr = 0, sg = 0, sb = 0;
+            const int rows[3] = {y0, y, y1}, cols[3] = {x0, x, x1};
+            for (int ry = 0; ry < 3; ++ry) {
+                for (int rx = 0; rx < 3; ++rx) {
+                    if (ry == 1 && rx == 1) continue;  // skip centre
+                    const uint8_t* n = &mid[((size_t)rows[ry] * dw + cols[rx]) * 3];
+                    sr += n[0]; sg += n[1]; sb += n[2];
+                }
+            }
+            const float mr = sr / 8.0f, mg = sg / 8.0f, mb = sb / 8.0f;
+            drow[x] = ss_pack565((int)(c[0] + amount * (c[0] - mr) + 0.5f),
+                                 (int)(c[1] + amount * (c[1] - mg) + 0.5f),
+                                 (int)(c[2] + amount * (c[2] - mb) + 0.5f));
+        }
+    }
+}
+
+// Draw the oversampled image over the (text-suppressed) label at its live content
+// coords — so it tracks scrolling exactly as the label would. Mirrors the
+// glyph_runs draw-callback pattern.
+void body_ssaa_draw_cb(lv_event_t* e) {
+    BodySSAAImage* st   = (BodySSAAImage*)lv_event_get_user_data(e);
+    lv_obj_t*      label = lv_event_get_target_obj(e);
+    lv_layer_t*    layer = lv_event_get_layer(e);
+    if (!st || !st->img || !layer) return;
+
+    lv_area_t cc;
+    lv_obj_get_content_coords(label, &cc);
+
+    lv_draw_image_dsc_t img;
+    lv_draw_image_dsc_init(&img);
+    img.src = st->img;
+    img.opa = LV_OPA_COVER;
+
+    // The image is (label content width + 2·pad_x) wide; shift left by pad_x so its
+    // centre lands on the label's centre (the pad is background, invisible on black).
+    lv_area_t area;
+    area.x1 = cc.x1 - st->pad_x;
+    area.y1 = cc.y1;
+    area.x2 = area.x1 + st->img->header.w - 1;
+    area.y2 = cc.y1 + st->img->header.h - 1;
+    lv_draw_image(layer, &img, &area);
+}
+
+void body_ssaa_delete_cb(lv_event_t* e) {
+    BodySSAAImage* st = (BodySSAAImage*)lv_event_get_user_data(e);
+    if (!st) return;
+    if (st->img) lv_draw_buf_destroy(st->img);
+    delete st;
+}
+
+}  // namespace
+
+// Oversample one already-laid-out body label (gates checked by the caller). Renders
+// each glyph at 2× its measured 1× position, downscales + sharpens, and draws the
+// result over the label — so breaks/widths/centring match the native label exactly.
+static void apply_body_supersample(lv_obj_t *label) {
+    const char* text = lv_label_get_text(label);
+    if (!text || !text[0]) return;
+
+    // Final wrapped geometry (the screen is fully laid out at this point).
+    lv_area_t cc;
+    lv_obj_get_content_coords(label, &cc);
+    const int w = lv_area_get_width(&cc);
+    const int h = lv_area_get_height(&cc);
+    if (w < 2 || h < 2) return;
+
+    const int ss = 2;
+    // Small horizontal headroom for glyph side-bearing / ink overshoot at the line
+    // edges; the image is drawn centred on the label so the pad is just background.
+    const int pad_x = 6;
+    const int iw = w + 2 * pad_x;   // 1× image width
+    const int cw = iw * ss;         // 2× canvas width (even)
+    const int ch = h * ss;
+
+    // 2× (34 px) twin of the body font (Regular) from the shared instance cache.
+    const lv_font_t* font2 = seedsigner_western_font(/*semibold=*/false, BODY_FONT_SIZE * ss);
+    if (!font2) return;
+
+    // Offscreen 2× canvas. Allocate via lv_draw_buf so the stride matches what
+    // lv_canvas_set_buffer derives; fill the body background, then draw the glyphs.
+    lv_draw_buf_t* cbuf = lv_draw_buf_create(cw, ch, LV_COLOR_FORMAT_RGB565, 0);
+    if (!cbuf) return;
+
+    lv_obj_t* cv = lv_canvas_create(lv_obj_get_screen(label));
+    lv_obj_add_flag(cv, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(cv, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_canvas_set_buffer(cv, cbuf->data, cw, ch, LV_COLOR_FORMAT_RGB565);
+    lv_canvas_fill_bg(cv, lv_color_hex(BACKGROUND_COLOR), LV_OPA_COVER);
+
+    lv_layer_t layer;
+    lv_canvas_init_layer(cv, &layer);
+
+    // Draw EACH glyph at 2× its EXACT 1× position (lv_label_get_letter_pos). Re-laying
+    // the text out at 34 px would drift: tiny_ttf rounds each glyph advance to whole px
+    // per size (34 px advance ≠ 2×17 px), so positions accumulate error along a line
+    // and the block ends up slightly wider. Placing each glyph at 2× its measured 1× x/y
+    // instead means every glyph downscales back to its original position → pixel-parity
+    // with the native label (identical breaks, widths, centring); wrapping is moot since
+    // the positions already encode the line breaks. Whitespace carries no ink, so skip it.
+    const lv_color_t body_color = lv_obj_get_style_text_color(label, LV_PART_MAIN);
+    const lv_area_t  full_area  = {0, 0, cw - 1, ch - 1};
+    {
+        // lv_draw_label queues a task that references dsc.text by POINTER and only
+        // rasterizes it at finish_layer — so each single-char string must stay alive
+        // until then. Hold them in a reserved vector (no realloc → c_str() stays valid).
+        std::vector<std::string> glyphs;
+        glyphs.reserve(strlen(text) + 1);
+
+        uint32_t byte_i = 0, char_id = 0;
+        while (text[byte_i]) {
+            const unsigned char c0 = (unsigned char)text[byte_i];
+            const int clen = (c0 < 0x80) ? 1 : ((c0 >> 5) == 0x6 ? 2 : ((c0 >> 4) == 0xE ? 3 : 1));
+            if (c0 != ' ' && c0 != '\n') {
+                lv_point_t pos;
+                lv_label_get_letter_pos(label, char_id, &pos);
+                glyphs.emplace_back(text + byte_i, (size_t)clen);
+
+                lv_draw_label_dsc_t d;
+                lv_draw_label_dsc_init(&d);
+                d.text  = glyphs.back().c_str();
+                d.font  = font2;
+                d.color = body_color;
+                d.align = LV_TEXT_ALIGN_LEFT;
+                d.ofs_x = ss * (pos.x + pad_x);  // 2× the 1× pen x (+ image pad)
+                d.ofs_y = ss * pos.y;            // 2× the 1× line top (ascent added by draw)
+                lv_draw_label(&layer, &d, &full_area);
+            }
+            byte_i += clen;
+            ++char_id;
+        }
+        lv_canvas_finish_layer(cv, &layer);   // rasterize all queued glyphs while `glyphs` is alive
+    }
+    lv_obj_delete(cv);                    // widget owned nothing; cbuf is still ours
+
+    // Downscale 2× + unsharp into an owned RGB565 image (iw×h), drawn over the label.
+    lv_draw_buf_t* out = lv_draw_buf_create(iw, h, LV_COLOR_FORMAT_RGB565, 0);
+    if (out) {
+        body_ssaa_downscale(cbuf->data, cbuf->header.stride, cw, ch, out, g_body_ssaa_sharpen);
+        BodySSAAImage* st = new BodySSAAImage{out, pad_x};
+        lv_obj_set_style_text_opa(label, LV_OPA_TRANSP, LV_PART_MAIN);  // hide native text
+        lv_obj_add_event_cb(label, body_ssaa_draw_cb, LV_EVENT_DRAW_MAIN_END, st);
+        lv_obj_add_event_cb(label, body_ssaa_delete_cb, LV_EVENT_DELETE, st);
+    }
+
+    lv_draw_buf_destroy(cbuf);
+}
+
+// Post-build pass: oversample every tagged body label on the finished screen. Gated
+// once here (enabled / 240-height / Latin), then recurses. Runs from
+// load_screen_and_cleanup_previous after layout + balanced wrap.
+static void apply_body_supersample_to_labels(lv_obj_t *obj) {
+    if (!obj || !g_body_ssaa_enabled) return;
+    if (active_profile().px_multiplier != PX_MULTIPLIER_100) return;  // Pi Zero (240) only
+    if (seedsigner_locale_uses_glyph_runs()) return;                  // Latin only for now
+
+    struct Recurse {
+        static void walk(lv_obj_t *o) {
+            if (lv_obj_check_type(o, &lv_label_class) &&
+                lv_obj_has_flag(o, SS_OBJ_FLAG_BODY_SSAA)) {
+                apply_body_supersample(o);
+            }
+            uint32_t n = lv_obj_get_child_count(o);
+            for (uint32_t i = 0; i < n; ++i) walk(lv_obj_get_child(o, i));
+        }
+    };
+    Recurse::walk(obj);
+}
+
+#else  // !LV_USE_CANVAS — offscreen canvas unavailable (some ESP32 lv_confs): compile out.
+
+static void apply_body_supersample_to_labels(lv_obj_t *obj) { (void)obj; }
+
+#endif  // LV_USE_CANVAS
 
 // Empty vertical space between a label's box top and the VISIBLE top of its text
 // — the font's ascent minus the text's real ink ascent. LVGL anchors text by the

@@ -198,6 +198,12 @@ void set_display(int width, int height);
 int display_profile_count();
 const DisplayProfile& display_profile_at(int index);
 
+// Rasterize (or fetch from cache) an OpenSans Western baseline font at an arbitrary
+// px — used by the per-label body supersampling to get the 2× (e.g. 34 px) twin of
+// the body font. Shares the same process-wide (weight, px) instance cache as the
+// baseline install. Returns nullptr if px <= 0 or built without LV_USE_TINY_TTF.
+const struct _lv_font_t* seedsigner_western_font(bool semibold, int px);
+
 // Resolution-keyed baked image selectors — return the variant matching the
 // active profile's px_multiplier (mirrors fonts_for_multiplier()). Used by the
 // screensaver (logo) and the opening splash (logo + HRF partner band).

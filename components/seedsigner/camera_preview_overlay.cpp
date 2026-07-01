@@ -32,7 +32,14 @@ struct camera_preview_overlay {
 
     int32_t   track_width;     // px width of the full track (for fill scaling)
     int32_t   fill_thickness;  // px thickness of track/fill (for radius)
+    int32_t   displayed_percent;  // current on-screen % (animated); drives glide + snap
 };
+
+// Duration of the completion fill-to-100% glide (the ONLY animated transition;
+// intermediate advances snap — see set_progress for why). The consumer's
+// completion hold (~550ms) is sized to outlast this so the glide plays before
+// the camera tears down.
+static const uint32_t OVERLAY_PROGRESS_ANIM_MS = 300;
 
 // Width (px) of the literal "100%" at the button font — the right-hand gutter the
 // progress track must leave for the percent label (Python pre-measures the same).
@@ -194,6 +201,17 @@ void camera_preview_overlay_set_scanning(camera_preview_overlay_t *o, bool activ
     }
 }
 
+// Paints the fill width + percent label from a single value; also the lv_anim
+// exec callback (var = the overlay) so the bar and number glide together.
+static void overlay_progress_paint(void *var, int32_t percent) {
+    camera_preview_overlay_t *o = (camera_preview_overlay_t *)var;
+    o->displayed_percent = percent;
+    int32_t fill_w = (int32_t)((int64_t)percent * o->track_width / 100);
+    lv_obj_set_width(o->fill, fill_w);
+    std::string text = std::to_string((int)percent) + "%";
+    lv_label_set_text(o->percent_label, text.c_str());
+}
+
 void camera_preview_overlay_set_progress(camera_preview_overlay_t *o,
                                          int percent,
                                          camera_overlay_frame_status_t frame_status) {
@@ -205,15 +223,40 @@ void camera_preview_overlay_set_progress(camera_preview_overlay_t *o,
     if (percent < 0)   percent = 0;
     if (percent > 100) percent = 100;
 
-    int32_t fill_w = (int32_t)((int64_t)percent * o->track_width / 100);
-    lv_obj_set_width(o->fill, fill_w);
-
-    std::string text = std::to_string(percent) + "%";
-    lv_label_set_text(o->percent_label, text.c_str());
+    // Glide ONLY the final fill to 100%; snap everything else.
+    //
+    // In FULL render mode a gliding fill re-renders the whole screen every refresh,
+    // which starves the camera preview's frame-push for the LVGL lock and visibly
+    // freezes the live preview. An instant set_width is a single render (same cost
+    // as one camera frame), so intermediate advances must snap to keep the preview
+    // smooth. The completion glide is exempt because it plays during the consumer's
+    // completion hold, right before the camera tears down — a brief freeze there is
+    // harmless and the fill-to-full is a nice confirmation flourish. Single-frame
+    // reads (displayed==0) and any non-forward update also snap.
+    lv_anim_del(o, overlay_progress_paint);  // cancel any in-flight glide first
+    bool glide_completion = (o->displayed_percent != 0)
+                            && (percent > o->displayed_percent)
+                            && (percent >= 100);
+    if (!glide_completion) {
+        overlay_progress_paint(o, percent);
+    } else {
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, o);
+        lv_anim_set_exec_cb(&a, overlay_progress_paint);
+        lv_anim_set_values(&a, o->displayed_percent, percent);
+        lv_anim_set_duration(&a, OVERLAY_PROGRESS_ANIM_MS);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_start(&a);
+    }
 
     apply_dot_status(o, frame_status);
 }
 
 void camera_preview_overlay_destroy(camera_preview_overlay_t *o) {
-    if (o) lv_free(o);
+    if (!o) return;
+    // Cancel any in-flight progress glide so its exec callback can't fire on the
+    // freed overlay after teardown (use-after-free).
+    lv_anim_del(o, overlay_progress_paint);
+    lv_free(o);
 }

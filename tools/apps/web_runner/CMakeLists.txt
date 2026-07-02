@@ -158,6 +158,8 @@ target_compile_definitions(web_runner PRIVATE
   # Both must match the font packs, which subset to the forms the shaper emits.
   LV_USE_BIDI=1
   LV_USE_ARABIC_PERSIAN_CHARS=1
+  # Native QR rendering (qr_display_screen) — LVGL-bundled qrcodegen, no source edits.
+  LV_USE_QRCODE=1
   DISPLAY_WIDTH=${DISPLAY_WIDTH}
   DISPLAY_HEIGHT=${DISPLAY_HEIGHT}
   $<$<BOOL:${SUPPORT_DISPLAY_HEIGHT_240}>:SUPPORT_DISPLAY_HEIGHT_240>
@@ -184,6 +186,11 @@ target_compile_options(web_runner PRIVATE
 # calls ss_load_staged once to drive the shared loader.
 target_link_options(web_runner PRIVATE
   -sUSE_SDL=2
+  # ALLOW_MEMORY_GROWTH lets tiny_ttf's rasterizer grow the heap. Emscripten is PINNED to
+  # 3.1.74 (Dockerfile / build.sh, matching .github/workflows/pages.yml) — on that version
+  # growable memory is a normal, non-resizable ArrayBuffer, so there's no TextDecoder abort
+  # and no GROWABLE_ARRAYBUFFERS flag (that setting only exists on em6+, and setting it on
+  # 3.1.74 is a hard error). See docs/knowledge/emscripten-growable-arraybuffer-textdecoder.md.
   -sALLOW_MEMORY_GROWTH=1
   -fexceptions
   -O2

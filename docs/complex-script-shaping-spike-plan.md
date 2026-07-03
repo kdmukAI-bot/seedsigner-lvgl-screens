@@ -5,10 +5,8 @@ was implemented and validated end-to-end (Devanagari + Nastaliq-Urdu + Thai + th
 `fa` oracle + a word-boundary insertion), with **no LVGL submodule patch**. See
 `docs/knowledge/offline-harfbuzz-shaping-spike-findings.md` for the result, the
 resolved risks, and a non-obvious subset-closure constraint discovered. The
-full-subsystem roadmap (below) is now unblocked. Concrete, finalized successor to
-`docs/complex-script-shaping-plan.md` (the "agreed direction + open questions" notes).
-Companion to `docs/font-farsi-rtl-plan.md`, `docs/font-tiering-plan.md`,
-`docs/font-and-i18n-rendering.md`. Paths below are repo-relative._
+full-subsystem roadmap (below) is now unblocked. Companion to `docs/font-farsi-rtl-plan.md`,
+`docs/font-tiering-plan.md`, `docs/font-and-i18n-rendering.md`. Paths below are repo-relative._
 
 ## Context
 
@@ -21,8 +19,8 @@ hard must-have for the initial LVGL release) needs reordering + conjunct glyphs 
 no Unicode codepoints; Urdu wants Nastaliq; Thai wants GPOS mark stacking. Broad
 world-language coverage requires a real shaper — **HarfBuzz**.
 
-**Decision (already made, see `docs/complex-script-shaping-plan.md`):** run HarfBuzz
-**offline / at build time**, never on the signing device. Deliver **pre-shaped glyph
+**Decision (already made):** run HarfBuzz **offline / at build time**, never on the
+signing device. Deliver **pre-shaped glyph
 runs** — `(glyph_id, x_offset, y_offset, x_advance)` in final visual order — plus the
 subset TTF. The device rasterizes those glyph-ids at display size (stb already does this
 internally) and places them by offset. Resolution-independent; keeps the heavy,

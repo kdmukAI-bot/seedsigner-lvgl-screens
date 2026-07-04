@@ -34,6 +34,7 @@ import subprocess
 import sys
 
 import hb_shaper
+import render_endonym
 import runs_bin
 import shape_inventory
 from po_catalog import corpus_chars, iter_translations
@@ -169,7 +170,53 @@ def manifest_locales(gen_bin, only):
     return locales
 
 
-def build_block_range_pack(name, entry, out_dir, assets_dir):
+def load_endonyms():
+    """locale code -> native display name (endonym), from the single source of
+    truth supported_locales.json. The picker shows each language in its own
+    script; a pack's endonym is baked into a small image (emit_endonym) so the
+    picker needs no runtime font to list it."""
+    path = os.path.join(REPO_ROOT, "tools/i18n/supported_locales.json")
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return {loc["code"]: loc.get("native", "") for loc in data.get("locales", [])}
+
+
+def endonym_sizes_by_locale(gen_bin):
+    """locale -> [(height_key, button_px), ...] from the render layer's own
+    manifest. The endonym image is rendered at the locale's BUTTON px for each
+    distinct display-profile height (240/320/480), so image rows match live text
+    rows. Deduped by height (profiles that share a height share the px), sorted."""
+    dump = subprocess.run([gen_bin, "--dump-locales"],
+                          check=True, capture_output=True, text=True)
+    manifest = json.loads(dump.stdout)
+    by_locale = {}  # name -> {height_key: px}
+    for prof_key, profile in manifest.items():
+        height = prof_key.split("x")[-1]  # "480x320" -> "320"
+        for loc in profile.get("locales", []):
+            btn = next((f for f in loc["fonts"] if f["role"] == "button"), None)
+            if btn is None:
+                continue
+            by_locale.setdefault(loc["locale"], {})[height] = btn["px"]
+    return {name: sorted(sizes.items()) for name, sizes in by_locale.items()}
+
+
+def emit_endonym(name, source_family, loc_out, assets_dir, endonym_text, sizes):
+    """Render `endonym_text` (in its native script) into loc_out/endonym_<h>.bin
+    at each (height, px) in `sizes`, using the FULL source TTF (the corpus subset
+    may not cover the endonym's own glyphs). Returns the endonym_images manifest
+    fragment ({} when there's nothing to render). Uses the same weight rule as the
+    role fonts: SemiBold for the OpenSans script packs, Regular for Noto."""
+    if not endonym_text or not sizes:
+        return {}
+    font_path = source_ttf(source_family, assets_dir)
+    if not os.path.exists(font_path):
+        print(f"[{name}] endonym SKIP: source TTF not found: {font_path}", file=sys.stderr)
+        return {}
+    return render_endonym.render_endonym_images(endonym_text, font_path, sizes, loc_out)
+
+
+def build_block_range_pack(name, entry, out_dir, assets_dir,
+                           endonym_text="", endonym_sizes=None):
     """Build a same-size SCRIPT pack: OpenSans subset to a fixed Unicode block
     (NOT the .po corpus), two weights to match the baked Western baseline this
     chains under -- Regular for body, SemiBold for the title/button roles.
@@ -196,11 +243,16 @@ def build_block_range_pack(name, entry, out_dir, assets_dir):
             "sha256": sha256_file(out_ttf),
         })
 
+    endonym_images = emit_endonym(name, entry["source_family"], loc_out, assets_dir,
+                                  endonym_text, endonym_sizes or [])
     manifest_out = {
         "locale": name,
         "source_family": entry["source_family"],
         "chain": entry["chain"],
+        "rtl": bool(entry.get("rtl")),
         "unicode_range": unicode_range,
+        "endonym": endonym_text,
+        "endonym_images": endonym_images,
         "fonts": fonts_meta,
     }
     with open(os.path.join(loc_out, "manifest.json"), "w") as f:
@@ -229,7 +281,8 @@ def _assert_runs_clean(units, glyph_count, locale):
                                      f"(subset has {glyph_count} glyphs) for {u['msgid']!r}")
 
 
-def build_complex_shaping_pack(name, entry, out_dir, assets_dir, translations_dir):
+def build_complex_shaping_pack(name, entry, out_dir, assets_dir, translations_dir,
+                               endonym_text="", endonym_sizes=None):
     """Build a COMPLEX-SCRIPT pack (Devanagari/Thai/Nastaliq/…): a keep-layout
     subset .ttf + a pre-shaped glyph-run table (runs.json) the device draws by
     glyph-id. Subset-then-shape with HarfBuzz (hb_shaper); classify each string
@@ -323,6 +376,8 @@ def build_complex_shaping_pack(name, entry, out_dir, assets_dir, translations_di
     runs_bin_path = os.path.join(loc_out, "runs.bin")
     runs_bin_bytes = runs_bin.write_runs_bin(runs_bin_path, with_runs, upem, direction, name)
 
+    endonym_images = emit_endonym(name, entry["source_family"], loc_out, assets_dir,
+                                  endonym_text, endonym_sizes or [])
     manifest_out = {
         "locale": name,
         "source_family": entry["source_family"],
@@ -330,6 +385,8 @@ def build_complex_shaping_pack(name, entry, out_dir, assets_dir, translations_di
         "shaping": True,
         "script": script,
         "rtl": bool(entry.get("rtl")),
+        "endonym": endonym_text,
+        "endonym_images": endonym_images,
         "corpus_glyphs": glyph_count,
         "font": {
             "file": f"{name}.ttf",
@@ -389,18 +446,29 @@ def main():
         print("No matching locales in manifest.", file=sys.stderr)
         return 1
 
+    # Endonym (native language name) + the per-height button px to render it at.
+    # Every pack ships a pre-rendered endonym image so the picker lists it with no
+    # runtime font; the strings come from supported_locales.json, the sizes from
+    # the render layer's own manifest.
+    endonyms = load_endonyms()
+    endonym_sizes = endonym_sizes_by_locale(args.gen_bin)
+
     for name, entry in locales.items():
+        endonym_text = endonyms.get(name, "")
+        sizes = endonym_sizes.get(name, [])
+
         # Complex-script packs (Devanagari/Thai/Nastaliq/…): keep-layout subset +
         # offline HarfBuzz glyph-run table. Routed by the render layer's `shaping`
         # flag (single source of truth), NOT a Python script-block guess.
         if entry.get("shaping"):
             build_complex_shaping_pack(name, entry, args.out_dir, args.assets_dir,
-                                       args.translations_dir)
+                                       args.translations_dir, endonym_text, sizes)
             continue
 
         # Script packs (Greek/Cyrillic/Vietnamese): block-range subset, no .po.
         if entry.get("unicode_range"):
-            build_block_range_pack(name, entry, args.out_dir, args.assets_dir)
+            build_block_range_pack(name, entry, args.out_dir, args.assets_dir,
+                                   endonym_text, sizes)
             continue
 
         po = os.path.join(args.translations_dir, "l10n", name, "LC_MESSAGES", "messages.po")
@@ -457,12 +525,20 @@ def main():
         # #2" — but no target runs cache_size=0; see the knowledge doc.)
         subset_ttf(src, symbols, out_ttf, drop_layout)
 
+        endonym_images = emit_endonym(name, entry["source_family"], loc_out,
+                                      args.assets_dir, endonym_text, sizes)
         manifest_out = {
             "locale": name,
             "source_family": entry["source_family"],
             "chain": entry["chain"],
+            # rtl drives layout mirroring for fa (Arabic/Persian); LTR for CJK. This
+            # branch previously omitted it, so fa's on-disk manifest lost its rtl —
+            # now emitted so the runtime can render this pack from the manifest alone.
+            "rtl": bool(entry.get("rtl")),
             # True ⇒ glyph set = presentation forms from lv_shape (not base letters).
             "shaped": shaped,
+            "endonym": endonym_text,
+            "endonym_images": endonym_images,
             "corpus_glyphs": len(symbols),
             "font": {
                 "file": f"{name}.ttf",

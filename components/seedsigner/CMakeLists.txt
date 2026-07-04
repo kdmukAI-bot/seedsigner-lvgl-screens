@@ -55,6 +55,9 @@ list(APPEND srcs
     # Camera live-preview overlay: portable spec + LVGL-widget renderer for the
     # UI drawn over the camera square (back affordance + animated-QR status bar).
     "camera_preview_overlay.cpp"
+    # Image-entropy capture overlay: two-phase (preview/confirm) sibling of the
+    # scan overlay — shutter capture + accept, or hardware-mode instruction text.
+    "camera_entropy_overlay.cpp"
     "input_profile.cpp"
     "navigation.cpp"
     # Baked RGB565 logo + HRF partner-logo assets, one per display-height profile

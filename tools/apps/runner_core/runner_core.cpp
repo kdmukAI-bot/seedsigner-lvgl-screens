@@ -24,6 +24,7 @@ const std::unordered_map<std::string, screen_fn_t> k_screen_registry = {
     {"large_icon_status_screen", large_icon_status_screen},
     {"seed_add_passphrase_screen", seed_add_passphrase_screen},
     {"camera_preview_overlay_screen", camera_preview_overlay_screen},
+    {"camera_entropy_overlay_screen", camera_entropy_overlay_screen},
     {"keyboard_screen", keyboard_screen},
     {"seed_mnemonic_entry_screen", seed_mnemonic_entry_screen},
     {"seed_finalize_screen", seed_finalize_screen},

@@ -481,6 +481,26 @@
       }
     ]
   },
+  "camera_entropy_overlay_screen": {
+    "context": {
+      "phase": "preview",
+      "preview_instructions": "< back  |  click a button",
+      "confirm_instructions": "< reshoot  |  accept >",
+      "capturing_text": "Capturing image...",
+      "capture_icon": "",
+      "accept_label": "Accept"
+    },
+    "variations": [
+      {
+        "name": "capturing",
+        "context": { "phase": "capturing" }
+      },
+      {
+        "name": "confirm",
+        "context": { "phase": "confirm" }
+      }
+    ]
+  },
   "keyboard_screen": {
     "context": {
       "top_nav": {

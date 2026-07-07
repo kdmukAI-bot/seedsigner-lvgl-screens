@@ -3583,6 +3583,12 @@ void seed_finalize_screen(void *ctx_json) {
     lv_obj_set_style_text_font(label, &BODY_FONT, LV_PART_MAIN);
     lv_obj_set_style_text_color(label, lv_color_hex(LABEL_FONT_COLOR), LV_PART_MAIN);
     lv_obj_set_style_pad_all(label, 0, LV_PART_MAIN);
+    // Single-line, so force CLIP: this label sits in a tight LV_SIZE_CONTENT col/row,
+    // where the default LV_LABEL_LONG_WRAP lets the shaped-locale run layer wrap a wide
+    // translation to the narrow content width and collapse it to line 0 (same failure as
+    // the psbt_change_details verified line — see glyph-run-single-line-label-wrap-collapse.md).
+    // The current translations fit at every profile; this guards against a longer one.
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
 
     // The fingerprint hex, one size step larger. Always Latin, so an exact body+2
     // (19px) Latin font matches Python's value size precisely.
@@ -4732,6 +4738,10 @@ void qr_build_hint_row(lv_obj_t *parent, const char *chevron, const std::string 
     lv_label_set_text(label, text.c_str());
     lv_obj_set_style_text_font(label, &BODY_FONT, LV_PART_MAIN);
     lv_obj_set_style_text_color(label, lv_color_hex(BODY_FONT_COLOR), LV_PART_MAIN);
+    // Single-line hint, so force CLIP: in this content-sized [chevron][text] row the
+    // default LV_LABEL_LONG_WRAP would let the shaped-locale run layer wrap a wide
+    // translation and collapse it to line 0 (see glyph-run-single-line-label-wrap-collapse.md).
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
 }
 
 // The brightness panel: a rounded semi-transparent box at the bottom, raised on
@@ -6085,6 +6095,15 @@ void psbt_change_details_screen(void *ctx_json) {
         lv_obj_set_style_text_font(vtx, &BODY_FONT, LV_PART_MAIN);
         lv_obj_set_style_text_color(vtx, lv_color_hex(BODY_FONT_COLOR), LV_PART_MAIN);
         lv_obj_set_style_pad_all(vtx, 0, LV_PART_MAIN);
+        // Force SINGLE-LINE. This is a one-line confirmation, but the default
+        // LV_LABEL_LONG_WRAP makes the shaped-locale run layer wrap the run to the
+        // label's content width (glyph_runs attach_runs) — and inside this tight
+        // LV_SIZE_CONTENT row that width is narrow, so a long SHAPED translation
+        // (e.g. Thai "ตรวจสอบที่อยู่แล้ว!") wraps and only line 0 survives in the
+        // one-line-tall box. CLIP keeps wrap_width 0 so the whole run stays on one
+        // line (same fix as the PSBTMath info word). The row stays content-sized,
+        // so the icon+text unit still measures/centers as a tight block below.
+        lv_label_set_long_mode(vtx, LV_LABEL_LONG_CLIP);
     }
 
     bind_screen_navigation(cfg, screen,

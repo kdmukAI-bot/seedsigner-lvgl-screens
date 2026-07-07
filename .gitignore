@@ -2,7 +2,6 @@
 build/
 cmake-build-*/
 out/
-review/
 
 # CMake artifacts
 CMakeFiles/
@@ -92,6 +91,5 @@ CLAUDE.md
 # nothing here needs to be tracked.
 /lang-packs/
 /tools/scenarios/localized/
-# Throwaway scratch dir: dev screenshots, montages, zoom crops, fetched refs.
-# (Was the untracked 'review/'; renamed to .tmp/ as a conventional scratch space.)
-.tmp/
+# Local scratch dir for review images (screenshots, montages, crops, device captures).
+review/

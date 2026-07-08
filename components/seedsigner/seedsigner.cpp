@@ -4383,9 +4383,8 @@ enum qr_encode_mode_t { QR_ENC_NUMERIC, QR_ENC_ALNUM, QR_ENC_BYTE, QR_ENC_AUTO }
 
 struct qr_display_ctx_t {
     lv_obj_t   *screen;
-    lv_obj_t   *canvas;
-    void       *canvas_buf;     // lv_malloc'd RGB565 canvas buffer (short_dim square)
-    int32_t     canvas_side;    // canvas edge in px (display short dimension)
+    lv_obj_t   *qr_obj;         // plain object; QR modules are direct-drawn in qr_draw_cb
+    int32_t     qr_side;        // qr_obj edge in px (display short dimension)
     lv_group_t *group;          // hardware keypad group (NULL in touch mode)
     lv_obj_t   *toast;          // brightness toast container (built once, hidden)
     lv_timer_t *toast_timer;    // one-shot auto-hide timer (NULL when idle)
@@ -4516,25 +4515,34 @@ bool qr_encode(qr_display_ctx_t *ctx, const uint8_t *data, size_t len) {
                                   qrcodegen_Mask_AUTO, false);
 }
 
-// Paint the current ctx->out matrix onto the canvas: gray fill, then black scale x scale
-// module blocks (row-runs coalesced into single rects), centered with a `border`-module
-// quiet zone. Reused verbatim on a brightness change (only the gray fill differs).
-void qr_paint(qr_display_ctx_t *ctx) {
-    if (!ctx->canvas || !ctx->have_frame) return;
+// Draw the current ctx->out matrix onto qr_obj's layer (DRAW_MAIN_END, i.e. on top of
+// the object's gray background): black scale x scale module blocks (row-runs coalesced
+// into single rects), centered with a `border`-module quiet zone.
+//
+// This REPLACES the old full-screen lv_canvas. On the ESP32 firmware LVGL runs on a
+// fixed ~128 KB internal-DRAM pool (LV_USE_BUILTIN_MALLOC); a short-dimension-square
+// RGB565 canvas is ~200 KB (480x320) to ~460 KB (800x480) and cannot fit, so lv_malloc
+// returned NULL and the screen HARD-FROZE the moment a QR was shown. Direct-drawing the
+// modules needs no large buffer at all (same class of fix as psbt_overview_screen). The
+// gray quiet-zone field is qr_obj's own background; only the black modules are painted
+// here. The layer clip restricts rasterization to the invalidated region, so a partial
+// repaint (e.g. the toast hiding) stays cheap.
+void qr_draw_cb(lv_event_t *e) {
+    qr_display_ctx_t *ctx   = (qr_display_ctx_t *)lv_event_get_user_data(e);
+    lv_layer_t       *layer = lv_event_get_layer(e);
+    if (!ctx || !layer || !ctx->have_frame) return;
+
+    lv_area_t obj_area;
+    lv_obj_get_coords(ctx->qr_obj, &obj_area);  // absolute coords of the gray square
 
     int size  = qrcodegen_getSize(ctx->out);
     int total = size + 2 * ctx->border;
-    int sd    = ctx->canvas_side;
+    int sd    = ctx->qr_side;
 
     int scale = sd / total;
     if (scale < 1) scale = 1;
     int qr_px = scale * total;
-    int off   = (sd - qr_px) / 2;  // center the QR within the square canvas
-
-    lv_canvas_fill_bg(ctx->canvas, qr_gray(ctx->brightness), LV_OPA_COVER);
-
-    lv_layer_t layer;
-    lv_canvas_init_layer(ctx->canvas, &layer);
+    int off   = (sd - qr_px) / 2;  // center the QR within the square
 
     lv_draw_rect_dsc_t d;
     lv_draw_rect_dsc_init(&d);
@@ -4543,6 +4551,8 @@ void qr_paint(qr_display_ctx_t *ctx) {
     d.radius       = 0;
     d.border_width = 0;
 
+    // Coalesce each row's lit modules into horizontal runs, offset by the object's
+    // absolute position (draw-event coords are screen-absolute, not object-local).
     for (int my = 0; my < size; my++) {
         int mx = 0;
         while (mx < size) {
@@ -4550,22 +4560,21 @@ void qr_paint(qr_display_ctx_t *ctx) {
             int run = mx;
             while (run < size && qrcodegen_getModule(ctx->out, run, my)) run++;
             lv_area_t a;
-            a.x1 = off + (ctx->border + mx)  * scale;
-            a.y1 = off + (ctx->border + my)  * scale;
-            a.x2 = off + (ctx->border + run) * scale - 1;
+            a.x1 = obj_area.x1 + off + (ctx->border + mx)  * scale;
+            a.y1 = obj_area.y1 + off + (ctx->border + my)  * scale;
+            a.x2 = obj_area.x1 + off + (ctx->border + run) * scale - 1;
             a.y2 = a.y1 + scale - 1;
-            lv_draw_rect(&layer, &d, &a);
+            lv_draw_rect(layer, &d, &a);
             mx = run;
         }
     }
-    lv_canvas_finish_layer(ctx->canvas, &layer);
 }
 
 void qr_encode_and_paint(qr_display_ctx_t *ctx, const uint8_t *data, size_t len) {
-    if (!ctx || !ctx->canvas || len == 0) return;
+    if (!ctx || !ctx->qr_obj || len == 0) return;
     if (!qr_encode(ctx, data, len)) return;  // too long to encode — keep the previous frame
     ctx->have_frame = true;
-    qr_paint(ctx);
+    lv_obj_invalidate(ctx->qr_obj);  // schedules qr_draw_cb to repaint with the new matrix
 }
 
 // --- brightness + toast ----------------------------------------------------
@@ -4599,7 +4608,10 @@ void qr_set_brightness(qr_display_ctx_t *ctx, int b) {
     if (b > 255) b = 255;
     if (b == ctx->brightness) return;
     ctx->brightness = b;
-    qr_paint(ctx);  // re-fill the gray; matrix unchanged (reuses ctx->out)
+    // The gray quiet-zone field is qr_obj's background; recolor it (the matrix is
+    // unchanged, still in ctx->out). set_style invalidates the object, so qr_draw_cb
+    // repaints the black modules on top of the new gray.
+    lv_obj_set_style_bg_color(ctx->qr_obj, qr_gray(ctx->brightness), LV_PART_MAIN);
     // Real-time change signal: on a brightness change the host RESTARTS an animated sequence
     // (Python restarts the UR fountain so the valuable pure frames are re-delivered from the
     // start) and may persist the value. Fires per change; the host may debounce slider drags.
@@ -4657,7 +4669,6 @@ void qr_cleanup_cb(lv_event_t *e) {
     if (!ctx) return;
     if (ctx->toast_timer) lv_timer_del(ctx->toast_timer);
     if (ctx->group)       lv_group_del(ctx->group);
-    if (ctx->canvas_buf)  lv_free(ctx->canvas_buf);
     if (ctx->tmp)         lv_free(ctx->tmp);
     if (ctx->out)         lv_free(ctx->out);
     if (g_qr_ctx == ctx)  g_qr_ctx = nullptr;
@@ -4729,7 +4740,7 @@ void qr_build_toast(qr_display_ctx_t *ctx, const std::string &brighter, const st
         lv_obj_t *slider = lv_slider_create(row);
         lv_slider_set_range(slider, 31, 255);                 // same 31..255 gray range
         lv_slider_set_value(slider, ctx->brightness, LV_ANIM_OFF);
-        lv_obj_set_width(slider, ctx->canvas_side / 2);
+        lv_obj_set_width(slider, ctx->qr_side / 2);
         lv_obj_set_style_bg_color(slider, lv_color_hex(INACTIVE_COLOR), LV_PART_MAIN);
         lv_obj_set_style_bg_color(slider, lv_color_hex(ACCENT_COLOR), LV_PART_INDICATOR);
         lv_obj_set_style_bg_color(slider, lv_color_hex(BODY_FONT_COLOR), LV_PART_KNOB);
@@ -4877,18 +4888,23 @@ void qr_display_screen(void *ctx_json) {
     ctx->tmp = (uint8_t *)lv_malloc(qrcodegen_BUFFER_LEN_MAX);
     ctx->out = (uint8_t *)lv_malloc(qrcodegen_BUFFER_LEN_MAX);
 
-    // Square canvas sized to the display's short dimension, centered.
+    // Square QR area sized to the display's short dimension, centered. This is a PLAIN
+    // object, not an lv_canvas: a short-dimension-square RGB565 canvas buffer (~200-460 KB)
+    // overflows the ESP32's ~128 KB LVGL pool and freezes the screen. Its gray background
+    // is the quiet-zone field (so a rare encode failure shows a clean gray, not garbage);
+    // qr_draw_cb paints the black modules on top with no large buffer. See qr_draw_cb.
     int32_t screen_w = lv_display_get_horizontal_resolution(NULL);
     int32_t screen_h = lv_display_get_vertical_resolution(NULL);
     int32_t sd = screen_w < screen_h ? screen_w : screen_h;
-    ctx->canvas_side = sd;
-    ctx->canvas_buf  = lv_malloc(LV_CANVAS_BUF_SIZE(sd, sd, 16, LV_DRAW_BUF_STRIDE_ALIGN));
-    ctx->canvas = lv_canvas_create(scr);
-    lv_canvas_set_buffer(ctx->canvas, ctx->canvas_buf, sd, sd, LV_COLOR_FORMAT_RGB565);
-    lv_obj_center(ctx->canvas);
-    // lv_malloc leaves the buffer uninitialized; fill gray up front so a rare encode
-    // failure (payload too long) shows a clean background, not garbage pixels.
-    lv_canvas_fill_bg(ctx->canvas, qr_gray(ctx->brightness), LV_OPA_COVER);
+    ctx->qr_side = sd;
+    ctx->qr_obj  = lv_obj_create(scr);
+    lv_obj_remove_style_all(ctx->qr_obj);
+    lv_obj_set_size(ctx->qr_obj, sd, sd);
+    lv_obj_center(ctx->qr_obj);
+    lv_obj_set_style_bg_color(ctx->qr_obj, qr_gray(ctx->brightness), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(ctx->qr_obj, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_remove_flag(ctx->qr_obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ctx->qr_obj, qr_draw_cb, LV_EVENT_DRAW_MAIN_END, ctx);
 
     g_qr_ctx = ctx;
 
@@ -4920,8 +4936,8 @@ void qr_display_screen(void *ctx_json) {
         }
     } else {
         // Touch: tap the QR to raise the toast; explicit top-right X to close.
-        lv_obj_add_flag(ctx->canvas, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(ctx->canvas, qr_canvas_tap_cb, LV_EVENT_CLICKED, ctx);
+        lv_obj_add_flag(ctx->qr_obj, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(ctx->qr_obj, qr_canvas_tap_cb, LV_EVENT_CLICKED, ctx);
         qr_build_close_button(ctx);
     }
 

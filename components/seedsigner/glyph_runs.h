@@ -51,7 +51,7 @@ int32_t seedsigner_circular_scroll_period(const struct _lv_font_t* font, int32_t
 // rasterization / re-shaping), run once per label.
 //
 // Shared by both wrap paths: the shaped glyph-run bake (glyph_runs.cpp, measuring
-// shaped advances) and the subset/Latin label balance (seedsigner.cpp, measuring
+// shaped advances) and the subset/Latin label balance (screen_helpers.cpp, measuring
 // lv_text_get_size). `measure(width, &nlines, &max_line_w)` reports, for a trial width,
 // the visual line count and the widest resulting line; a width is acceptable only if it
 // keeps the line count AND no line exceeds it (no word forced to overflow the column).

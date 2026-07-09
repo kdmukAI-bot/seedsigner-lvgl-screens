@@ -292,7 +292,7 @@
     ]
   },
   "screensaver_screen": {},
-  "splash_screen": {
+  "opening_splash_screen": {
     "context": {
       "version": "v0.8.7",
       "show_partner_logos": true,
@@ -730,7 +730,7 @@
       }
     ]
   },
-  "loading_screen": {
+  "loading_spinner_screen": {
     "context": {
       "text": "Loading…"
     },
@@ -923,7 +923,7 @@
       }
     ]
   },
-  "locale_picker_screen": {
+  "settings_locale_picker_screen": {
     "context": {
       "top_nav": {"title": "Language", "show_back_button": true},
       "active_locale": "en",
@@ -1075,7 +1075,7 @@
       },
       "is_bottom_list": true,
       "is_button_text_centered": true,
-      "message": "I hereby attest that I am the sole owner of the bitcoin address shown in this signing request, that I control the private key corresponding to it, and that I am signing this message of my own free will to prove that control to the requesting party. This statement is longer than a single screen so the reviewer must scroll through it, confirming every word of the exact text before it is cryptographically signed.",
+      "message": "I attest that I control this bitcoin address and that I endorse these words of Satoshi Nakamoto:\n\n\"The root problem with conventional currency is all the trust that's required to make it work. The central bank must be trusted not to debase the currency, but the history of fiat currencies is full of breaches of that trust. Banks must be trusted to hold our money and transfer it electronically, but they lend it out in waves of credit bubbles with barely a fraction in reserve. We have to trust them with our privacy, trust them not to let identity thieves drain our accounts.\"",
       "button_list": [
         "Next"
       ]

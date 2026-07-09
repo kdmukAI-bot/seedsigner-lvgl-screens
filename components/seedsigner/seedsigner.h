@@ -72,7 +72,7 @@ typedef struct {
 void button_list_screen(void *ctx_json);
 void main_menu_screen(void *ctx);
 void screensaver_screen(void *ctx_json);
-void splash_screen(void *ctx_json);
+void opening_splash_screen(void *ctx_json);
 void large_icon_status_screen(void *ctx_json);
 void seed_add_passphrase_screen(void *ctx_json);
 void camera_preview_overlay_screen(void *ctx_json);
@@ -83,7 +83,7 @@ void seed_finalize_screen(void *ctx_json);
 void seed_export_xpub_details_screen(void *ctx_json);
 void seed_review_passphrase_screen(void *ctx_json);
 void seed_words_screen(void *ctx_json);
-void loading_screen(void *ctx_json);
+void loading_spinner_screen(void *ctx_json);
 void qr_display_screen(void *ctx_json);
 // Zoomed, pannable SeedQR transcription view (parity with Python
 // SeedTranscribeSeedQRZoomedInScreen). Renders the QR oversized (fat round modules),
@@ -98,7 +98,7 @@ void psbt_overview_screen(void *ctx_json);
 void psbt_address_details_screen(void *ctx_json);
 void psbt_change_details_screen(void *ctx_json);
 void psbt_math_screen(void *ctx_json);
-void locale_picker_screen(void *ctx_json);
+void settings_locale_picker_screen(void *ctx_json);
 void multisig_wallet_descriptor_screen(void *ctx_json);
 void seed_sign_message_confirm_address_screen(void *ctx_json);
 void settings_qr_confirmation_screen(void *ctx_json);
@@ -152,6 +152,16 @@ bool qr_display_is_tip_active(void);
 // provides a strong definition to persist. Desktop tools may leave it stubbed.
 void seedsigner_lvgl_on_qr_brightness(uint8_t brightness);
 
+// Host callback: a body button (or a dismiss/complete sentinel) was selected. `index`
+// is the 0-based body-button index or a SEEDSIGNER_RET_* value; `label` is its text.
+// Ships a weak no-op default (in components.cpp); the host provides a strong override.
+// Declared here so every screen TU sees one declaration (was a per-file forward decl).
+void seedsigner_lvgl_on_button_selected(uint32_t index, const char *label);
+
+// Host callback: the user committed entered text (keyboard / passphrase / mnemonic
+// entry). Ships a weak no-op default (in components.cpp); host provides a strong one.
+void seedsigner_lvgl_on_text_entered(const char *text);
+
 // Text metrics (shared with components.cpp). Empty vertical space between a
 // label's box top and the VISIBLE top of its text — the font's declared ascent
 // minus the text's real ink ascent. LVGL anchors a text box by the font ascent
@@ -173,6 +183,11 @@ void lv_seedsigner_screen_close(void);
 // still capture non-deterministic (e.g. the text-entry cursor is shown without
 // blinking). Intended for the screenshot generator; off by default for live use.
 void seedsigner_lvgl_set_static_render(bool enabled);
+
+// Read the static-render flag. Screens that adapt to it (keyboards, loading,
+// qr_display, splash, transcribe) call this getter rather than reaching a
+// file-static, so their definitions can live in their own translation units.
+bool seedsigner_lvgl_is_static_render(void);
 
 
 #ifdef __cplusplus

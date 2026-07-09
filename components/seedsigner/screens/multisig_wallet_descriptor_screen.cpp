@@ -1,4 +1,4 @@
-#include "screen_scaffold.h"   // parse/scaffold/nav/load helpers (defined in seedsigner.cpp)
+#include "screen_scaffold.h"   // parse/scaffold/nav/load helpers (defined in screen_scaffold.cpp)
 #include "components.h"        // icon_text_line()
 #include "gui_constants.h"     // colors, scaled layout macros, fonts, seedsigner_latin_font()
 #include "navigation.h"        // NAV_BODY_VERTICAL

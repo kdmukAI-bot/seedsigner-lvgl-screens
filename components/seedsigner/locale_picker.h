@@ -3,7 +3,7 @@
 
 // ---------------------------------------------------------------------------
 // Locale-picker endonym images (the "show every language in its own script,
-// with no runtime font" plumbing for locale_picker_screen).
+// with no runtime font" plumbing for settings_locale_picker_screen).
 // ---------------------------------------------------------------------------
 //
 // The language-selection screen lists every onboard language's name in its own
@@ -16,7 +16,7 @@
 // recolored to the row's LIVE text color — so the row highlights/inverts on
 // focus with zero runtime fonts. Latin-script rows stay live text (button_ex).
 //
-// The screen itself is locale_picker_screen() in seedsigner.cpp (it needs the
+// The screen itself is settings_locale_picker_screen() in screens/settings_locale_picker_screen.cpp (it needs the
 // shared top-nav scaffold / navigation / screen-load helpers); it calls the
 // functions below to dress each image row.
 

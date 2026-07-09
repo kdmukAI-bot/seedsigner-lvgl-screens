@@ -1,4 +1,4 @@
-#include "screen_scaffold.h" // parse/scaffold/nav/load helpers (defined in seedsigner.cpp)
+#include "screen_scaffold.h" // parse/scaffold/nav/load helpers (defined in screen_scaffold.cpp)
 #include "seedsigner.h"      // screen_scaffold_t, this screen's decl (extern "C")
 #include "components.h"      // formatted_address()
 #include "gui_constants.h"   // colors, COMPONENT_PADDING, EDGE_PADDING, BODY_FONT, LABEL_FONT_COLOR

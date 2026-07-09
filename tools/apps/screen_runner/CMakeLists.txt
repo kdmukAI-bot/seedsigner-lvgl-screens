@@ -144,8 +144,9 @@ set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/locale_fonts.cpp"
   "${SEEDSIGNER_DIR}/font_registry.cpp"
   # i18n locale loader + complex-script glyph-run render layer (Devanagari/Thai/
-  # Nastaliq). seedsigner.cpp calls apply_glyph_runs_to_labels()/ss_reap_retired(),
-  # so these must be linked here just as in the screenshot_generator/web_runner.
+  # Nastaliq). screen_scaffold.cpp's load_screen_and_cleanup_previous() calls
+  # apply_glyph_runs_to_labels()/ss_reap_retired(), so these must be linked here
+  # just as in the screenshot_generator/web_runner.
   "${SEEDSIGNER_DIR}/locale_loader.cpp"
   "${SEEDSIGNER_DIR}/glyph_runs.cpp"
   "${SEEDSIGNER_DIR}/stb_glyph_metrics.c"
@@ -156,18 +157,14 @@ set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/keyboard_core.cpp"
   "${SEEDSIGNER_DIR}/input_profile.cpp"
   "${SEEDSIGNER_DIR}/navigation.cpp"
-  "${SEEDSIGNER_DIR}/seedsigner.cpp"
-  # Scope-A parity screens (one file per screen — multi-agent build).
-  "${SEEDSIGNER_DIR}/multisig_wallet_descriptor_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_sign_message_confirm_address_screen.cpp"
-  "${SEEDSIGNER_DIR}/settings_qr_confirmation_screen.cpp"
-  # Scope-B parity screens (one file per screen — multi-agent build).
-  "${SEEDSIGNER_DIR}/seed_sign_message_confirm_message_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_address_verification_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_calc_final_word_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_calc_final_word_done_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_transcribe_whole_qr_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_address_explorer_address_list_screen.cpp"
+  # Shared QR encode/decode core + gutter close button (qr_display + transcribe screens).
+  "${SEEDSIGNER_DIR}/qr_core.cpp"
+  # Cross-cutting scaffold + render/layout helper definitions (declarations in
+  # screen_scaffold.h / screen_helpers.h).
+  "${SEEDSIGNER_DIR}/screen_scaffold.cpp"
+  "${SEEDSIGNER_DIR}/screen_helpers.cpp"
+  # Per-screen entry points (screens/*_screen.cpp) come from the shared
+  # screen_sources.cmake glob, appended to add_executable() below.
   # Shared overlay manager: screensaver idle-watch dispatcher (toast queue later).
   "${SEEDSIGNER_DIR}/overlay_manager.cpp"
 )
@@ -182,11 +179,15 @@ set(SCREEN_RUNNER_SOURCE
   "${CMAKE_CURRENT_LIST_DIR}/screen_runner.cpp"
 )
 
+# Screen entry-point TUs from the single shared glob (screen_sources.cmake).
+include("${SEEDSIGNER_DIR}/screen_sources.cmake")
+
 add_executable(screen_runner
   ${LVGL_SOURCES}
   ${SEEDSIGNER_FONT_SOURCES}
   ${SEEDSIGNER_IMAGE_SOURCES}
   ${SEEDSIGNER_CORE_SOURCES}
+  ${SEEDSIGNER_SCREEN_SOURCES}
   ${RUNNER_COMMON_SOURCES}
   ${SCREEN_RUNNER_SOURCE}
 )

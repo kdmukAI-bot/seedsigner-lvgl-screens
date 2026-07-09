@@ -42,7 +42,7 @@ using json = nlohmann::json;
 // chrome (top_nav + bottom "Next" button + joystick/touch nav + screen load) to the
 // public button_list_screen with an empty intro, then OVERLAY the breakdown labels
 // on the freshly-loaded screen at their absolute positions. No duplication of the
-// file-private scaffold in seedsigner.cpp.
+// shared scaffold (screen_scaffold.cpp).
 //
 // FONT NOTE (parity caveat): Python renders the bits in Inconsolata-SemiBold at
 // button_font_size("default") + 2 = 20 px. This repo bakes Inconsolata-SemiBold
@@ -84,7 +84,7 @@ static const int BIT_COLUMNS = 11;             // a BIP-39 word index is 11 bits
 
 // Ink extents of `text` in `font`, measured above/below the baseline. `out_ascent`
 // is the tallest glyph ink above the baseline; `out_descent` the deepest below.
-// (Local copy of seedsigner.cpp's file-private measure_text_ink_extents — the bit
+// (Local copy of screen_helpers.cpp's measure_text_ink_extents — the bit
 // strings are pure ASCII, so a plain byte walk suffices.)
 static void measure_ascii_ink(const lv_font_t *font, const char *text,
                               int32_t &out_ascent, int32_t &out_descent) {

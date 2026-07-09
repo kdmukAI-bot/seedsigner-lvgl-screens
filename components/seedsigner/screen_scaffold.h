@@ -2,7 +2,7 @@
 #define SCREEN_SCAFFOLD_H
 
 // Internal (C++) declarations for the shared screen-building helpers that are
-// DEFINED in seedsigner.cpp. They are exposed here so that per-screen source
+// DEFINED in screen_scaffold.cpp. They are exposed here so that per-screen source
 // files (the "one screen per .cpp" pattern — e.g. multisig_wallet_descriptor_screen.cpp)
 // can reuse the standard scaffold instead of duplicating it:
 //   - JSON context parse/validate,
@@ -41,9 +41,8 @@ void bind_screen_navigation(const json &cfg, const screen_scaffold_t &screen,
                             nav_body_layout_t body_layout, size_t default_initial_index);
 
 // Add the pulsing WarningEdges border (color = status_color) on top of `screen`
-// (WarningEdgesMixin parity). Reused by warning-class screens split out of
-// seedsigner.cpp (e.g. seed_transcribe_whole_qr_screen.cpp) in addition to the
-// status screens that define it.
+// (WarningEdgesMixin parity). Reused by warning-class screens (e.g.
+// seed_transcribe_whole_qr_screen.cpp) in addition to the status screens.
 void add_warning_edges_overlay(lv_obj_t *screen, int status_color);
 
 // Switch to a finished screen: applies the RTL + complex-script glyph-run passes,

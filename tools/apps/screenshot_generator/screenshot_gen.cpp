@@ -70,7 +70,7 @@ static const std::unordered_map<std::string, screen_fn_t> k_screen_registry = {
     {"main_menu_screen", main_menu_screen},
     {"button_list_screen", button_list_screen},
     {"screensaver_screen", screensaver_screen},
-    {"splash_screen", splash_screen},
+    {"opening_splash_screen", opening_splash_screen},
     {"large_icon_status_screen", large_icon_status_screen},
     {"seed_add_passphrase_screen", seed_add_passphrase_screen},
     {"camera_preview_overlay_screen", camera_preview_overlay_screen},
@@ -81,14 +81,14 @@ static const std::unordered_map<std::string, screen_fn_t> k_screen_registry = {
     {"seed_export_xpub_details_screen", seed_export_xpub_details_screen},
     {"seed_review_passphrase_screen", seed_review_passphrase_screen},
     {"seed_words_screen", seed_words_screen},
-    {"loading_screen", loading_screen},
+    {"loading_spinner_screen", loading_spinner_screen},
     {"qr_display_screen", qr_display_screen},
     {"seed_transcribe_zoomed_qr_screen", seed_transcribe_zoomed_qr_screen},
     {"psbt_overview_screen", psbt_overview_screen},
     {"psbt_address_details_screen", psbt_address_details_screen},
     {"psbt_change_details_screen", psbt_change_details_screen},
     {"psbt_math_screen", psbt_math_screen},
-    {"locale_picker_screen", locale_picker_screen},
+    {"settings_locale_picker_screen", settings_locale_picker_screen},
     {"multisig_wallet_descriptor_screen", multisig_wallet_descriptor_screen},
     {"seed_sign_message_confirm_address_screen", seed_sign_message_confirm_address_screen},
     {"settings_qr_confirmation_screen", settings_qr_confirmation_screen},
@@ -708,7 +708,7 @@ int main(int argc, char **argv) {
 
     // The locale picker fetches endonym images (endonym_<h>.bin) through the same
     // byte-provider seam as the font loader — reuse the filesystem provider so a
-    // locale_picker_screen scenario renders its native-script rows from lang-packs/.
+    // settings_locale_picker_screen scenario renders its native-script rows from lang-packs/.
     static FsPackCtx picker_fs_ctx;
     picker_fs_ctx.font_dir = font_dir;
     locale_picker_set_image_provider(fs_pack_provider, &picker_fs_ctx);

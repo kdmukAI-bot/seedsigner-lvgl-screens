@@ -1,4 +1,4 @@
-#include "screen_scaffold.h" // parse/scaffold/nav/load helpers (defined in seedsigner.cpp)
+#include "screen_scaffold.h" // parse/scaffold/nav/load helpers (defined in screen_scaffold.cpp)
 #include "seedsigner.h"     // screen_scaffold_t, this screen's decl (extern "C")
 #include "components.h"      // icon_text_line(), formatted_address()
 #include "gui_constants.h"   // colors, COMPONENT_PADDING, INFO_COLOR, SeedSignerIconConstants
@@ -46,7 +46,7 @@ using json = nlohmann::json;
 
 // The scaffold/navigation helpers (parse_screen_json_ctx, create_top_nav_screen_scaffold,
 // bind_screen_navigation, load_screen_and_cleanup_previous) are declared in
-// screen_scaffold.h and defined (with external linkage) in seedsigner.cpp.
+// screen_scaffold.h and defined in screen_scaffold.cpp.
 void seed_sign_message_confirm_address_screen(void *ctx_json) {
     const char *json_str = (const char *)ctx_json;
 

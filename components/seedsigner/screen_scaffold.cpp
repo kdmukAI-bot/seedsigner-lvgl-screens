@@ -1,0 +1,562 @@
+// screen_scaffold.cpp — definitions for the shared TopNav/body/navigation scaffold
+// declared in screen_scaffold.h. Each per-screen TU under screens/ builds its chrome
+// through these entry points (create_top_nav_screen_scaffold, bind_screen_navigation,
+// load_screen_and_cleanup_previous, add_warning_edges_overlay, …).
+
+#include "seedsigner.h"
+#include "screen_scaffold.h"  // scaffold entry-point declarations (defined in this file)
+#include "screen_helpers.h"   // cross-cutting helpers the scaffold calls (defined in screen_helpers.cpp)
+#include "qr_core.h"          // shared QR encode/decode core + gutter close button (qr_display + transcribe)
+#include "components.h"
+#include "camera_preview_overlay.h"
+#include "camera_entropy_overlay.h"
+#include "keyboard_core.h"
+#include "gui_constants.h"
+#include "navigation.h"
+#include "input_profile.h"
+#include "font_registry.h"
+#include "glyph_runs.h"
+#include "locale_loader.h"   // ss_reap_retired() after the old screen is deleted
+#include "locale_picker.h"   // endonym-image rows for settings_locale_picker_screen
+#include "overlay_manager.h" // SS_OBJ_FLAG_NO_SCREENSAVER (per-screen saver policy)
+
+#include "lvgl.h"
+
+// Nayuki qrcodegen is BUNDLED inside the LVGL submodule (used by lv_qrcode). We call
+// it directly (not the lv_qrcode widget) so we control ECC level (L), mode (numeric for
+// SeedQR / byte for the rest), and a fixed quiet zone — see qr_display_screen below.
+// Gated by LV_USE_QRCODE: qrcodegen.c only compiles when the flag is set.
+#if LV_USE_QRCODE
+#include "../../third_party/lvgl/src/libs/qrcode/qrcodegen.h"
+#endif
+
+#include <nlohmann/json.hpp>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <cmath>
+#include <cstring>
+#include <cstdlib>
+#include <cctype>
+#include <set>
+#include <map>
+#include <algorithm>
+#ifdef ESP_PLATFORM
+#include <esp_heap_caps.h>   // psram_alloc: route PSBT-overview geometry off the internal heap
+#endif
+
+using json = nlohmann::json;
+
+
+// Reusable utility: build TopNav from any screen JSON config.
+// Reads cfg["top_nav"] and applies defaults when missing.
+static lv_obj_t* top_nav_from_screen_json(lv_obj_t* lv_parent, const json &cfg) {
+    bool show_back = true;
+    bool show_power = false;
+
+    if (!cfg.is_object()) {
+        throw std::runtime_error("screen config must be a JSON object");
+    }
+    if (!cfg.contains("top_nav") || !cfg["top_nav"].is_object()) {
+        throw std::runtime_error("top_nav object is required");
+    }
+
+    const auto &tn = cfg["top_nav"];
+    if (!tn.contains("title") || !tn["title"].is_string()) {
+        throw std::runtime_error("top_nav.title is required and must be a string");
+    }
+    std::string title = tn["title"].get<std::string>();
+
+    {
+        if (tn.contains("show_back_button")) {
+            if (!tn["show_back_button"].is_boolean()) {
+                throw std::runtime_error("top_nav.show_back_button must be a boolean");
+            }
+            show_back = tn["show_back_button"].get<bool>();
+        }
+        if (tn.contains("show_power_button")) {
+            if (!tn["show_power_button"].is_boolean()) {
+                throw std::runtime_error("top_nav.show_power_button must be a boolean");
+            }
+            show_power = tn["show_power_button"].get<bool>();
+        }
+    }
+
+    return top_nav(lv_parent, title.c_str(), show_back, show_power, NULL, NULL);
+}
+
+
+// Reusable sanity check for incoming screen JSON payloads.
+// Throws std::runtime_error on invalid shape/syntax.
+void parse_screen_json_ctx(const char *ctx_json, json &cfg_out) {
+    if (!ctx_json) {
+        throw std::runtime_error("screen JSON context is required");
+    }
+
+    try {
+        cfg_out = json::parse(ctx_json);
+    } catch (...) {
+        throw std::runtime_error("invalid JSON syntax");
+    }
+
+    if (!cfg_out.is_object()) {
+        throw std::runtime_error("screen config must be a JSON object");
+    }
+
+    // Per-screen screensaver policy: normalize to the single system default
+    // (allowed). This is the ONLY place allow_screensaver's default is set — the
+    // view owns the value, and every downstream consumer sees an explicit bool.
+    cfg_out["allow_screensaver"] = cfg_out.value("allow_screensaver", true);
+}
+
+
+void load_screen_and_cleanup_previous(lv_obj_t *new_screen) {
+    // Global RTL hook: flip text direction on the finished screen's labels for
+    // RTL locales (layout stays physical; user-input widgets stay LTR).
+    if (seedsigner_locale_is_rtl()) {
+        apply_rtl_text_to_labels(new_screen);
+    }
+    // Complex-script hook: for shaping locales (Devanagari/Thai/Nastaliq), replace
+    // matched labels' codepoint text with their pre-shaped glyph runs. Runs after
+    // RTL: a matched label's codepoint text is suppressed (text_opa TRANSP), so the
+    // base_dir set above is moot for it and the visual-order run is never re-reordered.
+    // Force layout first so each label's final content width is available — the
+    // glyph-run word-wrap fits long lines to it.
+    lv_obj_update_layout(new_screen);
+    apply_glyph_runs_to_labels(new_screen);
+
+    lv_obj_t *old_screen = lv_scr_act();
+    lv_scr_load(new_screen);
+    if (old_screen && old_screen != new_screen) {
+        lv_obj_delete(old_screen);
+
+        // The old screen is gone, so any script fonts a locale switch retired
+        // (detached but kept alive precisely because this screen's labels still
+        // pointed at them) are now unreferenced and safe to destroy. On a switch,
+        // the new screen above was built with the freshly registered fonts, never
+        // the retired ones. A no-op for plain same-locale navigation. This is the
+        // single point where retired fonts are reclaimed — see
+        // seedsigner_clear_registered_fonts() / ss_unload_locale() for why freeing
+        // them any earlier would dangle the old screen's labels.
+        ss_reap_retired();
+    }
+}
+
+
+static nav_aux_policy_t nav_aux_policy_from_cfg(const json &cfg) {
+    nav_aux_policy_t aux_policy = {NAV_AUX_ENTER, NAV_AUX_ENTER, NAV_AUX_ENTER};
+    if (!(cfg.contains("input") && cfg["input"].is_object() && cfg["input"].contains("keys") && cfg["input"]["keys"].is_object())) {
+        return aux_policy;
+    }
+
+    const auto &keys = cfg["input"]["keys"];
+    auto parse_aux = [](const json &k, const char *name, nav_aux_action_t current) {
+        if (!k.contains(name) || !k[name].is_string()) return current;
+        std::string s = k[name].get<std::string>();
+        if (s == "enter") return NAV_AUX_ENTER;
+        if (s == "noop") return NAV_AUX_NOOP;
+        if (s == "emit") return NAV_AUX_EMIT;
+        return current;
+    };
+
+    aux_policy.key1 = parse_aux(keys, "key1", aux_policy.key1);
+    aux_policy.key2 = parse_aux(keys, "key2", aux_policy.key2);
+    aux_policy.key3 = parse_aux(keys, "key3", aux_policy.key3);
+    return aux_policy;
+}
+
+
+// Shared nav wiring helper for all screens.
+// Screens provide only focusables/layout/default body index; this helper applies
+// top-nav wiring, aux-key policy, mode override, and binds nav in one place.
+//
+// Scroll-then-buttons joystick navigation (see navigation.h) is enabled
+// AUTOMATICALLY here — no per-screen opt-in. The trigger is a vertical screen with
+// non-focusable upper content (a separate, populated `upper_body`) above its
+// buttons whose body overflows the viewport: e.g. an overflowing
+// large_icon_status_screen, or a button_list_screen with intro text. A pure button
+// list (upper_body == body) is excluded — it scrolls via item-focus navigation —
+// as are grid layouts (main_menu) and screens that never call this helper
+// (seed_add_passphrase, screensaver).
+void bind_screen_navigation(const json &cfg,
+                                   const screen_scaffold_t &screen,
+                                   lv_obj_t **body_items,
+                                   size_t body_item_count,
+                                   nav_body_layout_t body_layout,
+                                   size_t default_initial_index) {
+    bool has_input_mode_override = false;
+    input_mode_t input_mode_override = INPUT_MODE_TOUCH;
+    nav_mode_override_from_cfg(cfg, has_input_mode_override, input_mode_override);
+
+    // Auto-detect scroll-then-buttons: a vertical screen with a separate, populated
+    // upper_body (non-focusable content above the buttons) whose body overflows the
+    // viewport. lv_obj_update_layout forces geometry so lv_obj_get_scroll_bottom is
+    // accurate; it runs only for screens with such upper content, so pure button
+    // lists (upper_body == body) and grids pay nothing and stay byte-identical.
+    lv_obj_t *scroll_obj = nullptr;
+    bool scroll_then_buttons = false;
+    if (body_layout == NAV_BODY_VERTICAL &&
+        body_item_count > 0 &&
+        screen.upper_body && screen.upper_body != screen.body &&
+        lv_obj_get_child_cnt(screen.upper_body) > 0) {
+        lv_obj_update_layout(screen.body);
+        if (lv_obj_get_scroll_bottom(screen.body) > 0) {
+            scroll_obj = screen.body;
+            scroll_then_buttons = true;
+        }
+    }
+
+    nav_config_t nav_cfg;
+    nav_cfg.screen = screen.screen;
+    nav_cfg.top_back_btn = screen.top_back_btn;
+    nav_cfg.top_power_btn = screen.top_power_btn;
+    nav_cfg.body_items = body_items;
+    nav_cfg.body_item_count = body_item_count;
+    nav_cfg.body_layout = body_layout;
+    nav_cfg.aux_policy = nav_aux_policy_from_cfg(cfg);
+    nav_cfg.initial_body_index = nav_initial_index_from_cfg(cfg, default_initial_index);
+    nav_cfg.has_input_mode_override = has_input_mode_override;
+    nav_cfg.input_mode_override = input_mode_override;
+    nav_cfg.scroll_obj = scroll_obj;
+    nav_cfg.scroll_then_buttons = scroll_then_buttons;
+    nav_bind(&nav_cfg);
+}
+
+
+// Build root screen: TopNav, body container, and (if cfg["button_list"] is
+// present) a flex-column body that stacks `upper_body`, an optional
+// flex-grow=1 spacer, and one button per `cfg["button_list"]` label.
+//
+// Usage patterns:
+//
+// 1. No button_list (e.g. `main_menu_screen`, `screensaver_screen`):
+//    the body is the existing non-flex container, `upper_body == body`,
+//    no scaffold-managed buttons.
+//
+// 2. button_list present, no upper content (is_bottom_list omitted/false
+//    AND no `cfg["text"]`): the legacy pure-list path — top-aligned
+//    `button()` chain in a plain body, `upper_body == body`. Kept
+//    byte-identical to the original `button_list_screen`. Such a list
+//    scrolls (when it overflows) via item-focus navigation, not a
+//    page-scroll step.
+//
+// 3. button_list present WITH upper content — i.e. is_bottom_list=true
+//    (status / confirmation screens) OR `cfg["text"]` provides intro text
+//    above the buttons: a vertical-flex body with a SEPARATE `upper_body`
+//    (LV_SIZE_CONTENT) followed by the buttons. `is_bottom_list` adds a
+//    flex-grow=1 spacer between `upper_body` and the first button so the
+//    buttons pin to the viewport bottom while content fits (collapsing on
+//    overflow); intro-text-only lists omit the spacer so the buttons flow
+//    directly under the text. When the body overflows, bind_screen_navigation
+//    auto-enables scroll-then-buttons joystick navigation (see navigation.h).
+//
+// Screens always populate `scaffold.upper_body` (or `scaffold.body` in
+// case #1, where they're the same object) and finish with
+// `load_screen_and_cleanup_previous(scaffold.screen)`.
+screen_scaffold_t create_top_nav_screen_scaffold(const json &cfg, bool scrollable, const lv_font_t *title_font) {
+    screen_scaffold_t out = {0};
+
+    out.screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(out.screen, lv_color_hex(BACKGROUND_COLOR), LV_PART_MAIN);
+    lv_obj_set_style_radius(out.screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_text_line_space(out.screen, BODY_LINE_SPACING, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(out.screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_outline_width(out.screen, 0, LV_PART_MAIN);
+
+    // Per-screen screensaver policy (view-owned, carried on the screen object):
+    // a view that set allow_screensaver=false gets the saver opt-out stamped onto
+    // this root, where the overlay dispatcher reads it off lv_scr_act(). Absent/
+    // true leaves the flag off = saver allowed. parse_screen_json_ctx normalizes
+    // the key, so this is the one shared stamp for every top-nav screen.
+    if (!cfg.value("allow_screensaver", true)) {
+        lv_obj_add_flag(out.screen, SS_OBJ_FLAG_NO_SCREENSAVER);
+    }
+    // NB: base direction is NOT set on the screen root. A root-level RTL base_dir
+    // would also mirror element LAYOUT (flex order + lv_obj_set_pos / align honor
+    // base_dir), flipping the Scan tile, the nav buttons, and the passphrase
+    // textarea cursor. Instead, RTL text direction is applied to text LABELS only,
+    // in one global post-pass — see load_screen_and_cleanup_previous().
+
+    bool show_back = true;
+    bool show_power = false;
+    const auto &tn = cfg["top_nav"];
+    if (tn.contains("show_back_button") && tn["show_back_button"].is_boolean()) {
+        show_back = tn["show_back_button"].get<bool>();
+    }
+    if (tn.contains("show_power_button") && tn["show_power_button"].is_boolean()) {
+        show_power = tn["show_power_button"].get<bool>();
+    }
+    std::string title = tn["title"].get<std::string>();
+
+    // Optional contextual icon beside the title (Python top_nav_icon_name /
+    // top_nav_icon_color) — e.g. SeedOptionsScreen's fingerprint. The glyph string is
+    // passed through verbatim (same PUA codepoints on both sides); the color defaults
+    // to the body font color when omitted.
+    std::string top_nav_icon;
+    uint32_t top_nav_icon_color = SEEDSIGNER_ICON_COLOR_DEFAULT;
+    if (tn.contains("icon")) {
+        if (!tn["icon"].is_string()) {
+            throw std::runtime_error("top_nav.icon must be a string");
+        }
+        top_nav_icon = tn["icon"].get<std::string>();
+    }
+    if (tn.contains("icon_color")) {
+        if (!tn["icon_color"].is_string()) {
+            throw std::runtime_error("top_nav.icon_color must be a string");
+        }
+        top_nav_icon_color = parse_hex_color(tn["icon_color"].get<std::string>());
+    }
+
+    out.top_nav = top_nav(out.screen, title.c_str(), show_back, show_power,
+                          &out.top_back_btn, &out.top_power_btn, title_font,
+                          top_nav_icon.empty() ? nullptr : top_nav_icon.c_str(),
+                          top_nav_icon_color, &out.title_label);
+    out.body = create_standard_body_content(out.screen, out.top_nav, scrollable);
+
+    // Decide which scaffold mode applies based on cfg.
+    std::vector<button_item_cfg_t> button_items;
+    bool has_button_list = read_button_list_items(cfg, button_items);
+    bool is_bottom_list = false;
+    if (cfg.contains("is_bottom_list")) {
+        if (!cfg["is_bottom_list"].is_boolean()) {
+            throw std::runtime_error("is_bottom_list must be a boolean");
+        }
+        is_bottom_list = cfg["is_bottom_list"].get<bool>();
+    }
+
+    // Python ButtonListScreen.is_button_text_centered (default True). false →
+    // left-align every button's label (used by Seed Options, the tools menu, and
+    // most non-main-menu list screens). Threaded into button_list()/button_ex below.
+    bool is_button_text_centered = true;
+    if (cfg.contains("is_button_text_centered")) {
+        if (!cfg["is_button_text_centered"].is_boolean()) {
+            throw std::runtime_error("is_button_text_centered must be a boolean");
+        }
+        is_button_text_centered = cfg["is_button_text_centered"].get<bool>();
+    }
+
+    // Button style, mirroring Python ButtonListScreen.Button_cls: "default" |
+    // "checkbox" (multi-select) | "checked_selection" (single-select radio). The
+    // checked indices come from cfg["checked_buttons"] (a list of ints), stamped onto
+    // each item's is_checked below. Both are screen-wide; the style is one value for
+    // the whole list, matching Python.
+    button_style_t button_style = BUTTON_STYLE_DEFAULT;
+    if (cfg.contains("button_style")) {
+        if (!cfg["button_style"].is_string()) {
+            throw std::runtime_error("button_style must be a string");
+        }
+        std::string s = cfg["button_style"].get<std::string>();
+        if (s == "default") {
+            button_style = BUTTON_STYLE_DEFAULT;
+        } else if (s == "checkbox") {
+            button_style = BUTTON_STYLE_CHECKBOX;
+        } else if (s == "checked_selection") {
+            button_style = BUTTON_STYLE_CHECKED_SELECTION;
+        } else {
+            throw std::runtime_error("button_style must be \"default\", \"checkbox\", or \"checked_selection\"");
+        }
+    }
+
+    std::set<int> checked_buttons;
+    if (cfg.contains("checked_buttons")) {
+        if (!cfg["checked_buttons"].is_array()) {
+            throw std::runtime_error("checked_buttons must be an array of integers");
+        }
+        for (const auto &idx : cfg["checked_buttons"]) {
+            if (!idx.is_number_integer() || idx.get<int>() < 0) {
+                throw std::runtime_error("checked_buttons entries must be non-negative integers");
+            }
+            checked_buttons.insert(idx.get<int>());
+        }
+    }
+
+    // Stamp is_checked onto each item from checked_buttons (no-op for DEFAULT style).
+    for (size_t i = 0; i < button_items.size(); ++i) {
+        button_items[i].is_checked = checked_buttons.count((int)i) > 0;
+    }
+
+    if (!has_button_list) {
+        // Mode 1: legacy. body == upper_body, no scaffold buttons.
+        out.upper_body = out.body;
+        return out;
+    }
+
+    if (button_items.size() > SEEDSIGNER_SCAFFOLD_MAX_BUTTONS) {
+        throw std::runtime_error("button_list exceeds SEEDSIGNER_SCAFFOLD_MAX_BUTTONS");
+    }
+
+    // Does this button list carry intro text above the buttons? If so it needs a
+    // separate `upper_body` (the flex path below) even when not bottom-pinned, so
+    // the text can be read by scrolling and the joystick nav can hand off to the
+    // buttons. (The screen renders the text into upper_body; the scaffold only
+    // builds the structure.)
+    bool has_intro_text = cfg.contains("text") && cfg["text"].is_string() &&
+                          !cfg["text"].get<std::string>().empty();
+
+    // Mode 2 (pure button list — no bottom pinning, no intro text): preserve
+    // byte-identical rendering with the prior `button_list_screen` implementation
+    // by using the existing `button_list()` helper (top-aligned, manual
+    // chain-align). `upper_body` aliases `body`. Overflow is handled by item-focus
+    // navigation (scroll_to_view), so this path gets NO page-scroll step.
+    if (!is_bottom_list && !has_intro_text) {
+        std::vector<button_list_item_t> items;
+        items.reserve(button_items.size());
+        for (const auto &it : button_items) {
+            button_list_item_t item = {};
+            item.label = it.label.c_str();
+            item.value = NULL;
+            item.icon = it.icon.empty() ? nullptr : it.icon.c_str();
+            item.right_icon = it.right_icon.empty() ? nullptr : it.right_icon.c_str();
+            item.icon_color = it.icon_color;
+            item.label_color = it.label_color;
+            item.is_checked = it.is_checked;
+            items.push_back(item);
+        }
+
+        button_list(out.body, items.data(), items.size(), is_button_text_centered, button_style);
+
+        // Discover the buttons that button_list() created so navigation can
+        // reach them through the scaffold.
+        uint32_t child_count = lv_obj_get_child_cnt(out.body);
+        for (uint32_t i = 0; i < child_count && out.button_list_count < SEEDSIGNER_SCAFFOLD_MAX_BUTTONS; ++i) {
+            lv_obj_t *child = lv_obj_get_child(out.body, i);
+            if (child && lv_obj_check_type(child, &lv_button_class)) {
+                out.button_list[out.button_list_count++] = child;
+            }
+        }
+
+        out.upper_body = out.body;
+        return out;
+    }
+
+    // Modes 3 & 4: button list WITH upper content. Switch body to a vertical flex
+    // column with children:
+    //   [0]   upper_body (LV_SIZE_CONTENT, owned by caller)
+    //   [1]   flex-grow=1 spacer — ONLY when is_bottom_list (Mode 3); pins the
+    //         buttons to the viewport bottom while content fits and collapses on
+    //         overflow. Intro-text-only lists (Mode 4) omit it so the buttons flow
+    //         directly under the text.
+    //   [...] one button per cfg.button_list label
+    //
+    // Row-gap of LIST_ITEM_PADDING produces the same inter-button spacing as
+    // the legacy `button_list()` helper.
+    lv_obj_set_layout(out.body, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(out.body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(out.body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(out.body, LIST_ITEM_PADDING, LV_PART_MAIN);
+
+    out.upper_body = lv_obj_create(out.body);
+    lv_obj_set_width(out.upper_body, lv_pct(100));
+    lv_obj_set_height(out.upper_body, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(out.upper_body, lv_color_hex(BACKGROUND_COLOR), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(out.upper_body, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(out.upper_body, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(out.upper_body, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(out.upper_body, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_layout(out.upper_body, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(out.upper_body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(out.upper_body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    if (is_bottom_list) {
+        out.button_list_spacer = lv_obj_create(out.body);
+        lv_obj_set_width(out.button_list_spacer, lv_pct(100));
+        lv_obj_set_height(out.button_list_spacer, 0);
+        lv_obj_set_flex_grow(out.button_list_spacer, 1);
+        lv_obj_set_style_bg_opa(out.button_list_spacer, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(out.button_list_spacer, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(out.button_list_spacer, 0, LV_PART_MAIN);
+        lv_obj_remove_flag(out.button_list_spacer, LV_OBJ_FLAG_SCROLLABLE);
+    }
+
+    // Shared leading-icon column = the widest leading icon on THIS screen, so the
+    // left-aligned labels all begin at the same x (adapts to the icons in use).
+    int32_t icon_column_w = 0;
+    for (const auto &it : button_items) {
+        int32_t w = inline_icon_width(it.icon.empty() ? nullptr : it.icon.c_str());
+        if (w > icon_column_w) icon_column_w = w;
+    }
+
+    for (size_t i = 0; i < button_items.size(); ++i) {
+        // align_to is unused under flex layout — flex positions the children — so
+        // pass NULL. is_text_centered carries the screen's centering choice; the
+        // per-item icon fields carry any inline/right icon + color.
+        const button_item_cfg_t &it = button_items[i];
+        button_opts_t opts = {};
+        opts.text = it.label.c_str();
+        opts.align_to = NULL;
+        opts.is_text_centered = is_button_text_centered;
+        opts.icon = it.icon.empty() ? nullptr : it.icon.c_str();
+        opts.right_icon = it.right_icon.empty() ? nullptr : it.right_icon.c_str();
+        opts.icon_color = it.icon_color;
+        opts.label_color = it.label_color;
+        opts.style = button_style;        // screen-wide checkbox/radio/default
+        opts.is_checked = it.is_checked;  // per-item checked state
+        opts.icon_column_w = icon_column_w;  // shared column so labels line up
+        lv_obj_t *btn = button_ex(out.body, &opts);
+        out.button_list[i] = btn;
+        out.button_list_count = i + 1;
+    }
+
+    // Match the legacy `button_list()` default: highlight the only button
+    // when there is exactly one; otherwise leave them all unselected.
+    if (out.button_list_count == 1) {
+        button_set_active(out.button_list[0], true);
+    }
+
+    return out;
+}
+
+
+// Pulsing colored border overlay for warning-class screens.
+//
+// Python paints five concentric borders per frame, ramping each border's
+// brightness from 0 to full and back. LVGL gives us a single border-style
+// with a width and an opacity, which captures the perceptual "breathing"
+// effect with one widget and one animation.
+//
+// The overlay sits on top of `screen` (not `body`), so it covers the TopNav
+// too and does not scroll with content — matching Python's behavior.
+//
+// LVGL automatically frees the animation when its target object is deleted,
+// so no explicit teardown is required.
+void add_warning_edges_overlay(lv_obj_t *screen, int status_color) {
+    lv_obj_t *edge = lv_obj_create(screen);
+    lv_obj_set_size(edge, lv_pct(100), lv_pct(100));
+    lv_obj_align(edge, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_remove_flag(edge, (lv_obj_flag_t)(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
+
+    lv_obj_set_style_bg_opa(edge, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_radius(edge, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(edge, 0, LV_PART_MAIN);
+    lv_obj_set_style_outline_width(edge, 0, LV_PART_MAIN);
+
+    lv_obj_set_style_border_color(edge, lv_color_hex(status_color), LV_PART_MAIN);
+    lv_obj_set_style_border_width(edge, EDGE_PADDING, LV_PART_MAIN);
+    lv_obj_set_style_border_side(edge, LV_BORDER_SIDE_FULL, LV_PART_MAIN);
+
+    // Pulse: opacity 255 -> 0 -> 255. The edges REST at full color and breathe
+    // OUT to fully off, then hold at full color before the next breath. This
+    // mirrors Python's WarningEdgesThread, which rests at inhale_factor=0 (full
+    // color), holds there for 8 frames, and ramps the brightness OUT toward black
+    // — so the resting/held state is bright, and the trough is (near) off. (The
+    // earlier 64->255 inverted this: it rested dim and never reached full off.)
+    //
+    // LVGL v9 names: `set_duration` is the forward leg (full -> off),
+    // `set_reverse_duration` the back-to-start leg (off -> full), and
+    // `set_repeat_delay` the pause between iterations — held at `start` (full
+    // color), since each iteration ends back at `start`. Python's ~10fps hold of
+    // 8 trough frames (~800 ms) maps to a 400 ms repeat delay here.
+    lv_anim_t pulse;
+    lv_anim_init(&pulse);
+    lv_anim_set_var(&pulse, edge);
+    lv_anim_set_values(&pulse, 255, 0);
+    lv_anim_set_duration(&pulse, 500);
+    lv_anim_set_reverse_duration(&pulse, 500);
+    lv_anim_set_repeat_delay(&pulse, 400);
+    lv_anim_set_repeat_count(&pulse, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&pulse, lv_anim_path_ease_in_out);
+    lv_anim_set_exec_cb(&pulse, [](void *obj, int32_t v) {
+        lv_obj_set_style_border_opa((lv_obj_t *)obj, (lv_opa_t)v, LV_PART_MAIN);
+    });
+    lv_anim_start(&pulse);
+}

@@ -46,18 +46,16 @@ list(APPEND srcs
     # it (recolored to the row's live text color) over a picker row — the "list every
     # language in its own script with no runtime font" path (locale_picker_screen).
     "locale_picker.cpp"
-    "seedsigner.cpp"
-    # Scope-A parity screens (one file per screen — multi-agent build).
-    "multisig_wallet_descriptor_screen.cpp"
-    "seed_sign_message_confirm_address_screen.cpp"
-    "settings_qr_confirmation_screen.cpp"
-    # Scope-B parity screens (one file per screen — multi-agent build).
-    "seed_sign_message_confirm_message_screen.cpp"
-    "seed_address_verification_screen.cpp"
-    "tools_calc_final_word_screen.cpp"
-    "tools_calc_final_word_done_screen.cpp"
-    "seed_transcribe_whole_qr_screen.cpp"
-    "tools_address_explorer_address_list_screen.cpp"
+    # Shared QR encode/decode core + gutter close button, compiled once and used by
+    # both chrome-free QR screens (qr_display_screen, seed_transcribe_zoomed_qr_screen).
+    "qr_core.cpp"
+    # Cross-cutting scaffold + render/layout helper definitions (declarations in
+    # screen_scaffold.h / screen_helpers.h).
+    "screen_scaffold.cpp"
+    "screen_helpers.cpp"
+    # Per-screen entry points (screens/*_screen.cpp) are appended below from the
+    # shared screen_sources.cmake glob — the single source of truth also used by
+    # the four desktop-tool build lists.
     # Shared LVGL keyboard/text-entry mechanics extracted from the passphrase
     # screen: cursor-styled text entry, key theming + icon recolor, 240px side
     # panel, joystick directional nav. Consumed by every keyboard-style screen.
@@ -91,6 +89,11 @@ list(APPEND srcs
     "images/btc_logo_img_133x.c"
     "images/btc_logo_img_200x.c"
 )
+
+# Per-screen entry-point TUs (screens/*_screen.cpp), globbed from the one shared
+# list so this stays in sync with the four desktop-tool build lists.
+include("${CMAKE_CURRENT_LIST_DIR}/screen_sources.cmake")
+list(APPEND srcs ${SEEDSIGNER_SCREEN_SOURCES})
 
 
 idf_component_register(

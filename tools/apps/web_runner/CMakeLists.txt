@@ -117,18 +117,14 @@ set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/keyboard_core.cpp"
   "${SEEDSIGNER_DIR}/input_profile.cpp"
   "${SEEDSIGNER_DIR}/navigation.cpp"
-  "${SEEDSIGNER_DIR}/seedsigner.cpp"
-  # Scope-A parity screens (one file per screen — multi-agent build).
-  "${SEEDSIGNER_DIR}/multisig_wallet_descriptor_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_sign_message_confirm_address_screen.cpp"
-  "${SEEDSIGNER_DIR}/settings_qr_confirmation_screen.cpp"
-  # Scope-B parity screens (one file per screen — multi-agent build).
-  "${SEEDSIGNER_DIR}/seed_sign_message_confirm_message_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_address_verification_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_calc_final_word_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_calc_final_word_done_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_transcribe_whole_qr_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_address_explorer_address_list_screen.cpp"
+  # Shared QR encode/decode core + gutter close button (qr_display + transcribe screens).
+  "${SEEDSIGNER_DIR}/qr_core.cpp"
+  # Cross-cutting scaffold + render/layout helper definitions (declarations in
+  # screen_scaffold.h / screen_helpers.h).
+  "${SEEDSIGNER_DIR}/screen_scaffold.cpp"
+  "${SEEDSIGNER_DIR}/screen_helpers.cpp"
+  # Per-screen entry points (screens/*_screen.cpp) come from the shared
+  # screen_sources.cmake glob, appended to add_executable() below.
   # Shared overlay manager: screensaver idle-watch dispatcher (toast queue later).
   "${SEEDSIGNER_DIR}/overlay_manager.cpp"
   # Locale font seam + the shared locale-pack loader (ss_load_locale): the web host
@@ -153,11 +149,15 @@ set(RUNNER_COMMON_SOURCES
 # WASM rebuild. The build is the engine only: index.{html,js,wasm}. Asset staging
 # lives in stage_assets.py (called by build.sh and the CI assemble-site step).
 
+# Screen entry-point TUs from the single shared glob (screen_sources.cmake).
+include("${SEEDSIGNER_DIR}/screen_sources.cmake")
+
 add_executable(web_runner
   ${LVGL_SOURCES}
   ${SEEDSIGNER_FONT_SOURCES}
   ${SEEDSIGNER_IMAGE_SOURCES}
   ${SEEDSIGNER_CORE_SOURCES}
+  ${SEEDSIGNER_SCREEN_SOURCES}
   ${RUNNER_COMMON_SOURCES}
   "${CMAKE_CURRENT_LIST_DIR}/web_runner.cpp")
 

@@ -618,6 +618,23 @@ extern "C" __attribute__((weak)) void seedsigner_lvgl_on_button_selected(uint32_
     (void)label;
 }
 
+// Host hook for text-entry screens (keyboard / passphrase): fired on OK with the entered
+// string. Weak no-op default; a host overrides it to receive the value. Sibling of the
+// on_button_selected default above (both are the module's host-callback surface).
+extern "C" __attribute__((weak)) void seedsigner_lvgl_on_text_entered(const char *text) {
+    (void)text;
+}
+
+// Host-facing teardown of the active screen: delete any running animations and clear the
+// active screen's widget tree. Public C API (declared in seedsigner.h).
+void lv_seedsigner_screen_close(void)
+{
+    /*Delete all animation*/
+    lv_anim_del(NULL, NULL);
+
+    lv_obj_clean(lv_scr_act());
+}
+
 // --- Touch long-press-to-scroll (Item 3) ------------------------------------------
 //
 // In TOUCH mode a button has no persistent focus, so an overflowing label can't

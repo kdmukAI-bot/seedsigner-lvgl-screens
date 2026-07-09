@@ -247,7 +247,7 @@ std::vector<RunLine> wrap_line(const RunLine& g, const std::vector<uint32_t>& br
 // ---------------------------------------------------------------------------
 // Balanced wrap (shaped path). The line-count binary search itself
 // (balanced_wrap_width) now lives in glyph_runs.h, shared with the subset/Latin
-// label balance in seedsigner.cpp; here we only supply the shaped measure. The
+// label balance in screen_helpers.cpp; here we only supply the shaped measure. The
 // shaped bake below applies it to EVERY wrapped shaped label — the only multi-line
 // wrapped text in the app today is body copy, so single-line titles/buttons (one
 // line) are untouched. NOTE: if a future screen wraps shaped text that should NOT be

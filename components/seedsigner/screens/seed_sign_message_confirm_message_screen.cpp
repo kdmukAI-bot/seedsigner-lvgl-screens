@@ -17,7 +17,7 @@
 //   top_nav.title (str)  — default "Review Message".
 //   button_list (array)  — default ["Next"].
 
-#include "screen_scaffold.h"   // parse/scaffold/nav/load helpers (defined in seedsigner.cpp)
+#include "screen_scaffold.h"   // parse/scaffold/nav/load helpers (defined in screen_scaffold.cpp)
 #include "seedsigner.h"        // screen_scaffold_t
 #include "gui_constants.h"     // BODY_FONT, colors
 #include "navigation.h"        // NAV_BODY_VERTICAL
@@ -29,7 +29,7 @@
 
 using json = nlohmann::json;
 
-// Defined (non-static) in seedsigner.cpp: the status/intro body's tight, ink-derived
+// Defined in screen_helpers.cpp: the status/intro body's tight, ink-derived
 // inter-line advance so multi-line body text matches the PIL reference.
 void apply_body_tight_line_spacing(lv_obj_t *label);
 

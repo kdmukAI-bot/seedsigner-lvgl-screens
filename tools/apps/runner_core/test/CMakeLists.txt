@@ -65,8 +65,8 @@ if(SUPPORT_DISPLAY_HEIGHT_480)
 endif()
 
 # Baked logo + HRF partner-logo assets, gated per display height (mirrors the
-# font blocks above). seedsigner.cpp references both selectors, so both the logo
-# and HRF variants for each compiled-in height must link.
+# font blocks above). The splash/screensaver screen TUs reference both selectors,
+# so both the logo and HRF variants for each compiled-in height must link.
 set(SEEDSIGNER_IMAGE_SOURCES "")
 if(SUPPORT_DISPLAY_HEIGHT_240)
   list(APPEND SEEDSIGNER_IMAGE_SOURCES
@@ -87,17 +87,21 @@ if(SUPPORT_DISPLAY_HEIGHT_480)
     "${SEEDSIGNER_DIR}/images/btc_logo_img_200x.c")
 endif()
 
+# Screen entry-point TUs from the single shared glob (screen_sources.cmake).
+include("${SEEDSIGNER_DIR}/screen_sources.cmake")
+
 add_executable(test_runner_core
   ${LVGL_SOURCES}
   ${SEEDSIGNER_FONT_SOURCES}
   ${SEEDSIGNER_IMAGE_SOURCES}
+  ${SEEDSIGNER_SCREEN_SOURCES}
   "${SEEDSIGNER_DIR}/gui_constants.cpp"
   "${SEEDSIGNER_DIR}/locale_fonts.cpp"
   "${SEEDSIGNER_DIR}/font_registry.cpp"
-  # Complex-script i18n: seedsigner.cpp calls apply_glyph_runs_to_labels()/
-  # ss_reap_retired() (glyph_runs.cpp, which uses stb_glyph_metrics.c) and loads
-  # locale catalogs (locale_loader.cpp). The native/WASM apps already link these;
-  # this target must too or seedsigner.cpp fails to link.
+  # Complex-script i18n: screen_scaffold.cpp's load_screen_and_cleanup_previous()
+  # calls apply_glyph_runs_to_labels()/ss_reap_retired() (glyph_runs.cpp, which uses
+  # stb_glyph_metrics.c) and loads locale catalogs (locale_loader.cpp). The native/WASM
+  # apps already link these; this target must too or the link fails.
   "${SEEDSIGNER_DIR}/locale_loader.cpp"
   "${SEEDSIGNER_DIR}/glyph_runs.cpp"
   "${SEEDSIGNER_DIR}/stb_glyph_metrics.c"
@@ -108,18 +112,14 @@ add_executable(test_runner_core
   "${SEEDSIGNER_DIR}/keyboard_core.cpp"
   "${SEEDSIGNER_DIR}/input_profile.cpp"
   "${SEEDSIGNER_DIR}/navigation.cpp"
-  "${SEEDSIGNER_DIR}/seedsigner.cpp"
-  # Scope-A parity screens (one file per screen — multi-agent build).
-  "${SEEDSIGNER_DIR}/multisig_wallet_descriptor_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_sign_message_confirm_address_screen.cpp"
-  "${SEEDSIGNER_DIR}/settings_qr_confirmation_screen.cpp"
-  # Scope-B parity screens (one file per screen — multi-agent build).
-  "${SEEDSIGNER_DIR}/seed_sign_message_confirm_message_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_address_verification_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_calc_final_word_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_calc_final_word_done_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_transcribe_whole_qr_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_address_explorer_address_list_screen.cpp"
+  # Shared QR encode/decode core + gutter close button (qr_display + transcribe screens).
+  "${SEEDSIGNER_DIR}/qr_core.cpp"
+  # Cross-cutting scaffold + render/layout helper definitions (declarations in
+  # screen_scaffold.h / screen_helpers.h).
+  "${SEEDSIGNER_DIR}/screen_scaffold.cpp"
+  "${SEEDSIGNER_DIR}/screen_helpers.cpp"
+  # Per-screen entry points (screens/*_screen.cpp) come from the shared
+  # screen_sources.cmake glob (${SEEDSIGNER_SCREEN_SOURCES}, added above).
   "${SEEDSIGNER_DIR}/overlay_manager.cpp"
   "${COMMON_DIR}/runner_core.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/test_runner_core.cpp")

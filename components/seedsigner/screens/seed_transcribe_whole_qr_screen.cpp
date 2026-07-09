@@ -33,7 +33,9 @@
 #include "lvgl.h"
 
 #if LV_USE_QRCODE
-#include "../../third_party/lvgl/src/libs/qrcode/qrcodegen.h"
+// File lives one level deeper (screens/), so this repo-root-relative reach to
+// LVGL's bundled qrcodegen needs an extra ../ vs. the component-root copy.
+#include "../../../third_party/lvgl/src/libs/qrcode/qrcodegen.h"
 #endif
 
 #include <nlohmann/json.hpp>

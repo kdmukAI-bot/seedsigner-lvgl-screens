@@ -62,7 +62,7 @@ static std::string g_cur_json;
 // own copies of the buffers it registers).
 static std::map<std::string, std::vector<uint8_t>> g_staged_blobs;
 
-// Endonym images for the locale picker (locale_picker_screen). Unlike the font
+// Endonym images for the locale picker (settings_locale_picker_screen). Unlike the font
 // staging above — one active locale at a time, filenames unique within it — the
 // picker needs MANY locales' endonym images resident at once, and they share a
 // filename (every pack has an "endonym_<height>.bin"). So this staging is keyed by
@@ -240,7 +240,7 @@ EMSCRIPTEN_KEEPALIVE void ss_stage_blob(const char* file, const uint8_t* data, i
 
 // Stage one endonym image for the picker, keyed by "<locale>/<file>" (see
 // g_endonym_blobs). JS calls this once per image row before ss_load_screen(
-// "locale_picker_screen", ...); the picker then fetches them via endonym_provider.
+// "settings_locale_picker_screen", ...); the picker then fetches them via endonym_provider.
 EMSCRIPTEN_KEEPALIVE void ss_stage_endonym(const char* locale, const char* file,
                                            const uint8_t* data, int len) {
     if (!locale || !file || !data || len <= 0) return;

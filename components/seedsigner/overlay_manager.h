@@ -38,7 +38,7 @@ uint32_t overlay_manager_get_screensaver_timeout(void);
 
 // Per-screen screensaver opt-out, carried as an LVGL object flag stamped on the
 // screen's root object. A view that set allow_screensaver=false has this flag
-// applied to its screen (in seedsigner.cpp's scaffold); the dispatcher skips
+// applied to its screen (in the shared scaffold, screen_scaffold.cpp); the dispatcher skips
 // activation while the active screen carries it. The flag rides on the object,
 // so it auto-clears on every screen swap — no global bookkeeping.
 //

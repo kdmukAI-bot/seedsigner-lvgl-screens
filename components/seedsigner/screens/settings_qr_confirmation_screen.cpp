@@ -30,7 +30,7 @@ using json = nlohmann::json;
 //   1. Delegate to `button_list_screen` with an EMPTY intro text. That produces the
 //      exact ButtonListScreen chrome the reference uses — top_nav (no back arrow),
 //      the bottom-pinned "Home" button, joystick/touch nav wiring, and the screen
-//      load — with zero duplication of the file-private scaffold in seedsigner.cpp.
+//      load — with zero duplication of the shared scaffold (screen_scaffold.cpp).
 //      (Verified: the top_nav + Home button land pixel-for-pixel on the reference.)
 //   2. Overlay the two centered body labels on the freshly-loaded screen at their
 //      absolute Python `screen_y`, since ButtonListScreen positions these TextAreas
@@ -45,7 +45,7 @@ using json = nlohmann::json;
 //     // "button_list" OPTIONAL: host may override the action label; defaults to ["Home"].
 //   }
 
-// Ink-based tight inter-line spacing, mirroring seedsigner.cpp's file-private
+// Ink-based tight inter-line spacing, mirroring screen_helpers.cpp's
 // tight_line_space()/apply_body_tight_line_spacing() (kept screen-private here per
 // the multi-agent brief). LVGL's declared font line_height carries loose leading, so
 // a plain wrapped label spaces its lines ~10 px looser than the PIL/Python TextArea
@@ -86,7 +86,7 @@ static int32_t tight_body_line_space(const lv_font_t *font, const char *text)
 
     if (max_ascent + max_descent <= 0) return 0;  // measured nothing; leave default
 
-    const int32_t line_gap = LIST_ITEM_PADDING / 2;   // seedsigner.cpp uses the same gap
+    const int32_t line_gap = LIST_ITEM_PADDING / 2;   // screen_helpers.cpp uses the same gap
     const int32_t line_h   = (int32_t)lv_font_get_line_height(font);
     int32_t space = (max_ascent + max_descent + line_gap) - line_h;
 

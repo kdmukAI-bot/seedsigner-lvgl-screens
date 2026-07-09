@@ -141,18 +141,18 @@ set(SEEDSIGNER_CORE_SOURCES
   "${SEEDSIGNER_DIR}/keyboard_core.cpp"
   "${SEEDSIGNER_DIR}/input_profile.cpp"
   "${SEEDSIGNER_DIR}/navigation.cpp"
-  "${SEEDSIGNER_DIR}/seedsigner.cpp"
-  # Scope-A parity screens (one file per screen — multi-agent build).
-  "${SEEDSIGNER_DIR}/multisig_wallet_descriptor_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_sign_message_confirm_address_screen.cpp"
-  "${SEEDSIGNER_DIR}/settings_qr_confirmation_screen.cpp"
-  # Scope-B parity screens (one file per screen — multi-agent build).
-  "${SEEDSIGNER_DIR}/seed_sign_message_confirm_message_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_address_verification_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_calc_final_word_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_calc_final_word_done_screen.cpp"
-  "${SEEDSIGNER_DIR}/seed_transcribe_whole_qr_screen.cpp"
-  "${SEEDSIGNER_DIR}/tools_address_explorer_address_list_screen.cpp"
+  # Shared QR encode/decode core + gutter close button (qr_display + transcribe screens).
+  "${SEEDSIGNER_DIR}/qr_core.cpp"
+  # Cross-cutting scaffold + render/layout helper definitions (declarations in
+  # screen_scaffold.h / screen_helpers.h).
+  "${SEEDSIGNER_DIR}/screen_scaffold.cpp"
+  "${SEEDSIGNER_DIR}/screen_helpers.cpp"
+  # NOTE: overlay_manager.cpp is intentionally omitted here (unlike the other
+  # runners). It is the screensaver idle-watch dispatcher, driven only by the
+  # interactive host loop; the screenshot generator has no such loop and
+  # references none of its symbols, so linking it would be dead weight.
+  # Per-screen entry points (screens/*_screen.cpp) come from the shared
+  # screen_sources.cmake glob, appended to add_executable() below.
 )
 
 set(SCREENSHOT_GEN_SOURCE
@@ -163,11 +163,15 @@ set(SCREENSHOT_GEN_SOURCE
   "${CMAKE_CURRENT_LIST_DIR}/shape_spike.cpp"
 )
 
+# Screen entry-point TUs from the single shared glob (screen_sources.cmake).
+include("${SEEDSIGNER_DIR}/screen_sources.cmake")
+
 add_executable(screenshot_gen
   ${LVGL_SOURCES}
   ${SEEDSIGNER_FONT_SOURCES}
   ${SEEDSIGNER_IMAGE_SOURCES}
   ${SEEDSIGNER_CORE_SOURCES}
+  ${SEEDSIGNER_SCREEN_SOURCES}
   ${SCREENSHOT_GEN_SOURCE}
 )
 

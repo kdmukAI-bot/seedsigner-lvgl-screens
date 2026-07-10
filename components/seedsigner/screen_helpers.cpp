@@ -289,35 +289,19 @@ lv_obj_t *make_body_text_label(lv_obj_t *parent, const char *text, int32_t width
 
 
 // ---------------------------------------------------------------------------
-// large_icon_status_screen
+// Status-type trio: the status-screen family's shared config layer.
+//
+// status_type_t / status_type_defaults_t are defined in screen_helpers.h.
+// defaults_for_status_type() is the per-status lookup table — hero icon glyph,
+// status color, reserved default title / button label, warning-edges default,
+// and text-inset multiplier. parse_status_type() reads and validates
+// cfg["status_type"] against the enumerated values. apply_status_type_defaults()
+// injects the table's defaults into a screen cfg (and forces is_bottom_list)
+// before the scaffold reads it. Consumed by large_icon_status_screen — see that
+// file's banner for the screen contract; Python's Success / Warning /
+// DireWarning / Error variants all funnel through this table.
 // ---------------------------------------------------------------------------
-//
-// Ports Python's `LargeIconStatusScreen` family — Success / Warning /
-// DireWarning / Error — to LVGL. The Python class hierarchy collapses into a
-// single function with a `status_type` enum.
-//
-// Layout (built on `create_top_nav_screen_scaffold` with cfg.button_list +
-// cfg.is_bottom_list = true):
-//
-//   ┌────────────────────────────────┐
-//   │ TopNav (title; optional back)  │
-//   ├────────────────────────────────┤
-//   │  [hero icon, status_color]     │
-//   │  [headline, status_color]      │
-//   │  [body text, body color]       │
-//   │  ┄ ┄ ┄ flex spacer ┄ ┄ ┄ ┄ ┄  │
-//   │  [ OK / I understand ]         │
-//   └────────────────────────────────┘
-//
-// When `cfg.warning_edges` is true a pulsing colored border is rendered on top
-// of the screen (see `add_warning_edges_overlay`).
-//
-// `large_icon_status_screen` itself only adds the icon, headline, and body
-// text into `scaffold.upper_body`; the scaffold owns the spacer and the
-// button.
 
-// status_type_t + status_type_defaults_t are defined in screen_helpers.h (shared
-// with the status-family screens that move out).
 status_type_defaults_t defaults_for_status_type(status_type_t st) {
     switch (st) {
         case status_type_t::SUCCESS:

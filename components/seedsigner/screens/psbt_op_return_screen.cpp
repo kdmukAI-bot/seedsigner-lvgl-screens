@@ -54,6 +54,14 @@
 //   button_list               (array, required, non-empty)  the localized action
 //            buttons (Python: "Next"); built by the scaffold. is_bottom_list is
 //            forced true (Python: is_bottom_list = True).
+//   initial_selected_index    (int, optional)        overrides the default initial
+//            focus of 0 (navigation layer; Python selected_button).
+//   input.mode                (string, optional)     "touch" | "hardware" input-mode
+//            override (navigation layer).
+//   input.keys.key1/key2/key3 (string, optional)     per-aux-key policy "enter" |
+//            "noop" | "emit" (navigation layer).
+//   allow_screensaver         (bool, default true)   per-screen screensaver policy
+//            (normalized by parse_screen_json_ctx, stamped by the scaffold).
 
 #include "screen_scaffold.h"  // parse_screen_json_ctx / create_top_nav_screen_scaffold / bind_screen_navigation / load_screen_and_cleanup_previous
 #include "seedsigner.h"       // psbt_op_return_screen decl, screen_scaffold_t

@@ -57,6 +57,8 @@
 //            a host-supplied value is ignored.
 //   top_nav.show_power_button  forced false (Python BaseTopNavScreen default
 //            False); a host-supplied value is ignored.
+//   allow_screensaver          (bool, default true)  per-screen screensaver policy
+//            (normalized by parse_screen_json_ctx, stamped by the scaffold).
 
 #include "screen_scaffold.h"   // parse_screen_json_ctx, create_top_nav_screen_scaffold, load_screen_and_cleanup_previous
 #include "seedsigner.h"        // io_test_capture_state_t, io_test_set_capture_state decl, seedsigner_lvgl_on_aux_key, seedsigner_lvgl_is_static_render

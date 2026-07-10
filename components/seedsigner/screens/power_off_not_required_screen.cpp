@@ -26,6 +26,14 @@
 //   top_nav.show_power_button (bool, default false)  Python BaseTopNavScreen default.
 //   text                      (string, required)     localized body message
 //            (Python: _("It is safe to disconnect power at any time.")).
+//   initial_selected_index    (int, optional)        read by the navigation layer
+//            but moot here — the screen registers no body focusables.
+//   input.mode                (string, optional)     "touch" | "hardware" input-mode
+//            override (navigation layer).
+//   input.keys.key1/key2/key3 (string, optional)     per-aux-key policy "enter" |
+//            "noop" | "emit" (navigation layer).
+//   allow_screensaver         (bool, default true)   per-screen screensaver policy
+//            (normalized by parse_screen_json_ctx, stamped by the scaffold).
 
 #include "screen_scaffold.h"  // parse_screen_json_ctx / create_top_nav_screen_scaffold / bind_screen_navigation / load_screen_and_cleanup_previous
 #include "seedsigner.h"       // power_off_not_required_screen decl, screen_scaffold_t

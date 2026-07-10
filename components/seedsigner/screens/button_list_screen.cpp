@@ -14,6 +14,9 @@
 // scroll-then-buttons joystick navigation: the text scrolls into view before
 // the first button takes focus.
 //
+// Lifecycle: Tier 1 (stateless) — no statics, timers, or heap ctx; all state is
+// widget-tree-owned or stack-local.
+//
 // cfg:
 //   button_list               (array, required)      the localized button entries;
 //            each is "Label", ["Label", ...] (label at index 0), or a

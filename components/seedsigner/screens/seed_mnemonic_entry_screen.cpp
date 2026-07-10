@@ -49,6 +49,8 @@
 //   input.mode                (string, optional: "touch" | "hardware")  read via
 //            nav_mode_override_from_cfg to pick the candidate-panel variant;
 //            absent -> the platform input profile decides.
+//   allow_screensaver         (bool, default true)   normalized by the parse layer;
+//            false stamps the screensaver opt-out flag on the root (scaffold layer).
 
 #include "screen_scaffold.h"  // parse_screen_json_ctx, create_top_nav_screen_scaffold, load_screen_and_cleanup_previous
 #include "seedsigner.h"       // screen_scaffold_t fields, seedsigner_lvgl_on_text_entered, seedsigner_lvgl_is_static_render

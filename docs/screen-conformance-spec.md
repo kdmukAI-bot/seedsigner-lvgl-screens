@@ -87,6 +87,15 @@ Rules:
 - The cfg contract enumerates **every** key the code reads — several screens' tables
   had drifted; a stale contract is a defect (an AI author regenerating a scenario
   from the contract must get a faithful screen).
+- **Contract register (uniform across screens):** the table also lists keys the
+  scaffold/nav layer reads on the screen's behalf, each marked by reading layer
+  (e.g. `[scaffold]`, `[nav]`): `top_nav.*`, `button_list`/`is_bottom_list` where
+  applicable, `initial_selected_index`, `input.mode` / `input.keys.*`, and
+  `allow_screensaver` `[parse/scaffold]`. Chrome-free screens (no scaffold) omit
+  the scaffold-layer keys entirely — `allow_screensaver` is normalized by the
+  parse helper but unconsumed on that tier, so it is not tabled there.
+- Every banner states the screen's **lifecycle tier** (§6) in one line, and
+  chrome-free screens name their tier per §8.
 - Comments describe **current code only**: no tombstones ("X now lives in Y"), no
   monolith-position references, no off-repo task IDs (A13, Task 0, Items 2b/2c).
   Historical rationale goes to `docs/knowledge/`.
@@ -359,7 +368,8 @@ Documented-only; each is a build-list + doc change and none block screen conform
 
 Applied to the conformed screens; the rollout applies it to the rest:
 
-1. Banner per §3 (provenance `file.py:line`, complete cfg contract, deviations noted).
+1. Banner per §3 (provenance = class + Python file, no line number; complete
+   layer-marked cfg contract; lifecycle tier; deviations noted).
 2. Includes per §4 (curated, purpose-commented, canonical order, kitchen-sink block deleted).
 3. Explicit `using json = nlohmann::json;`.
 4. File skeleton per §2 (anon namespace, entry point last).

@@ -54,6 +54,8 @@
 //            selected_button).
 //   input.mode                (string, optional)    [read by the navigation layer]
 //            "touch" | "hardware" input-mode override.
+//   input.keys.key1/key2/key3 (string, optional)    [read by the navigation layer]
+//            per-aux-key policy "enter" | "noop" | "emit".
 //   allow_screensaver         (bool, default true)  [read by the parse/scaffold
 //            layer] normalized by parse_screen_json_ctx; false stamps the
 //            screensaver opt-out flag on the screen root.

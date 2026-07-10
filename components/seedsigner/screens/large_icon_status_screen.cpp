@@ -49,6 +49,9 @@
 // family, so they are NOT converted here; they are slated for
 // require-and-throw at status-family rollout.
 //
+// Lifecycle: Tier 1 (stateless) — no statics, timers, or heap ctx; all state is
+// widget-tree-owned.
+//
 // cfg:
 //   status_type      (string, required)    "success" | "warning" | "dire_warning" |
 //            "error" | "custom" — selects the hero icon, status color, warning-edges
@@ -72,6 +75,14 @@
 //            a host-supplied value is ignored.
 //   top_nav.show_back_button / top_nav.show_power_button pass through untouched to
 //            the scaffold's own defaults (back=true, power=false).
+//   initial_selected_index    (int, optional)        overrides the default initial
+//            focus of 0 (navigation layer; Python selected_button).
+//   input.mode                (string, optional)     "touch" | "hardware" input-mode
+//            override (navigation layer).
+//   input.keys.key1/key2/key3 (string, optional)     per-aux-key policy "enter" |
+//            "noop" | "emit" (navigation layer).
+//   allow_screensaver         (bool, default true)   per-screen screensaver policy
+//            (normalized by parse_screen_json_ctx, stamped by the scaffold).
 
 #include "screen_scaffold.h"  // parse_screen_json_ctx / create_top_nav_screen_scaffold / add_warning_edges_overlay / bind_screen_navigation / load_screen_and_cleanup_previous
 #include "seedsigner.h"       // large_icon_status_screen decl, screen_scaffold_t fields, text_top_leading

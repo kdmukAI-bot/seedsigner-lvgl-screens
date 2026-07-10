@@ -27,6 +27,9 @@
 // below the word (Python's absolute screen_y math), with the scaffold's bottom
 // spacer pushing the buttons to the viewport bottom.
 //
+// Lifecycle: Tier 1 (stateless) — no statics, timers, or heap ctx; all state is
+// widget-tree-owned or stack-local.
+//
 // cfg:
 //   top_nav.title             (string, required)     localized ordinal title
 //            ("12th Word" / "24th Word", derived host-side from the mnemonic length).
@@ -40,6 +43,14 @@
 //            fingerprint value (Python: _("fingerprint")).
 //   button_list               (array, required, non-empty)  the localized action
 //            buttons (Python: LOAD "Load seed", DISCARD "Discard" with label_color red).
+//   initial_selected_index    (int, optional)        overrides the default initial
+//            focus of 0 (navigation layer; Python selected_button).
+//   input.mode                (string, optional)     "touch" | "hardware" input-mode
+//            override (navigation layer).
+//   input.keys.key1/key2/key3 (string, optional)     per-aux-key policy "enter" |
+//            "noop" | "emit" (navigation layer).
+//   allow_screensaver         (bool, default true)   per-screen screensaver policy
+//            (normalized by parse_screen_json_ctx, stamped by the scaffold).
 
 #include "screen_scaffold.h"  // parse_screen_json_ctx / create_top_nav_screen_scaffold / bind_screen_navigation / load_screen_and_cleanup_previous
 #include "seedsigner.h"       // tools_calc_final_word_done_screen decl, text_top_leading

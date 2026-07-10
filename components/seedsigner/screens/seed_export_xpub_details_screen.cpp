@@ -46,6 +46,12 @@
 //            host-supplied value is ignored.
 //   initial_selected_index    (int, optional)        initial focused-button
 //            override; read by the navigation layer (default 0 = first button).
+//   input.mode                (string, optional)     "touch" | "hardware" input-mode
+//            override (navigation layer).
+//   input.keys.key1/key2/key3 (string, optional)     per-aux-key policy "enter" |
+//            "noop" | "emit" (navigation layer).
+//   allow_screensaver         (bool, default true)   per-screen screensaver policy
+//            (normalized by parse_screen_json_ctx, stamped by the scaffold).
 
 #include "screen_scaffold.h"  // parse_screen_json_ctx / create_top_nav_screen_scaffold / add_warning_edges_overlay / bind_screen_navigation / load_screen_and_cleanup_previous
 #include "seedsigner.h"       // seed_export_xpub_details_screen decl, screen_scaffold_t

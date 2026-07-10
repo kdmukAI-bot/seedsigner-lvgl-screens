@@ -29,6 +29,8 @@
 //            override (navigation layer).
 //   input.keys.key1/key2/key3 (string, optional)     per-aux-key policy "enter" |
 //            "noop" | "emit" (navigation layer).
+//   initial_selected_index    (int, optional)        read by the navigation layer
+//            but moot here — the screen registers no body focusables.
 //   allow_screensaver         (bool, default true)   per-screen screensaver policy
 //            (normalized by parse_screen_json_ctx, stamped by the scaffold).
 

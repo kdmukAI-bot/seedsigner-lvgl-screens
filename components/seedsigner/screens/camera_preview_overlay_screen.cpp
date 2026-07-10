@@ -19,6 +19,10 @@
 // overlay the same way, and the two share the synthetic-preview-background builder
 // verbatim (kept byte-exact pending the camera_overlay_common extraction).
 //
+// Lifecycle: Tier 1 (stateless) — no statics, no timers, no cleanup callback. The
+// overlay handle is created and immediately destroyed; destroy() frees only the
+// handle struct, leaving the widgets parented on the screen tree.
+//
 // The back affordance is chosen by the overlay module from input_profile_get_mode(),
 // which the tools set per resolution (240 = hardware -> on-preview instruction text;
 // larger = touch -> gutter back button).

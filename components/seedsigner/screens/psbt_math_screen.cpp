@@ -30,6 +30,9 @@
 //   - info words render single-line (LV_LABEL_LONG_CLIP) so a long shaped
 //     translation clips gracefully instead of wrapping onto the row below.
 //
+// Lifecycle: Tier 1 (stateless) — no statics, timers, or heap ctx; the equation
+// block is widget-tree-owned.
+//
 // cfg:
 //   top_nav.title              (string, required)     localized screen title
 //            (Python: _("Transaction Math")); read by the scaffold.
@@ -57,6 +60,14 @@
 //            scaffold as the bottom-pinned list.
 //   is_bottom_list             forced true (Python: is_bottom_list = True); a
 //            host-supplied value is ignored.
+//   initial_selected_index     (int, optional)        overrides the default initial
+//            focus of 0 (navigation layer; Python selected_button).
+//   input.mode                 (string, optional)     "touch" | "hardware" input-mode
+//            override (navigation layer).
+//   input.keys.key1/key2/key3  (string, optional)     per-aux-key policy "enter" |
+//            "noop" | "emit" (navigation layer).
+//   allow_screensaver          (bool, default true)   per-screen screensaver policy
+//            (normalized by parse_screen_json_ctx, stamped by the scaffold).
 
 #include "screen_scaffold.h"  // parse_screen_json_ctx / create_top_nav_screen_scaffold / bottom_button_top_y / bind_screen_navigation / load_screen_and_cleanup_previous
 #include "seedsigner.h"       // psbt_math_screen decl, screen_scaffold_t fields

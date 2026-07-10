@@ -371,9 +371,11 @@ status_type_t parse_status_type(const json &cfg) {
 // `is_bottom_list` is forced to true for status screens, matching
 // LargeIconStatusScreen.__post_init__.
 //
-// NOTE (rollout): the top_nav portion below duplicates ensure_top_nav_defaults;
-// this function is slated to rebuild on top of it when the status-family screens
-// go through conformance, so the two stay byte-identical until then.
+// NOTE (rollout): the English content defaults below (title, button label)
+// predate the content policy (docs/screen-conformance-spec.md) — user-visible
+// text must come localized from the host, so when the status family goes
+// through conformance these become require-and-throw and the structural parts
+// rebuild on ensure_top_nav_structure. Unchanged until then.
 void apply_status_type_defaults(json &cfg, const status_type_defaults_t &defaults) {
     if (!cfg.contains("top_nav") || !cfg["top_nav"].is_object()) {
         cfg["top_nav"] = json::object();
@@ -391,41 +393,41 @@ void apply_status_type_defaults(json &cfg, const status_type_defaults_t &default
 
 
 // ---------------------------------------------------------------------------
-// top_nav chrome defaults (shared write-if-absent injection).
+// top_nav chrome normalization (structural defaults + content validation).
 //
-// The ensure-top_nav-object → default-title (→ back/power flag) block is the
-// standard pre-scaffold cfg normalization: create_top_nav_screen_scaffold throws
-// on a missing top_nav / title, so every screen injects its Python-parity
-// defaults before building the chrome. Semantics are write-if-absent only —
-// a host-provided value always wins. Forced (non-defaulted) overrides — e.g.
-// unconditionally hiding the back button — stay explicit assignments at the
-// call site AFTER the call, preserving each screen's guarded-vs-forced
-// host-override contract instead of burying it in parameters.
+// Content policy (docs/screen-conformance-spec.md): user-visible strings —
+// including the top-nav title — arrive LOCALIZED from the host view layer via
+// cfg; a screen never injects an English content default. Structural flags
+// (never rendered as text) keep write-if-absent defaults — a host-provided
+// value always wins. Forced (non-defaulted) overrides — e.g. unconditionally
+// hiding the back button — stay explicit assignments at the call site AFTER
+// the call, preserving each screen's guarded-vs-forced host-override contract
+// instead of burying it in parameters.
 
-void ensure_top_nav_defaults(json &cfg, const std::string &default_title) {
+void ensure_top_nav_structure(json &cfg,
+                              bool default_show_back_button, bool default_show_power_button) {
     // Match the inline blocks this replaces: an absent OR non-object top_nav is
     // replaced with a fresh object (a non-object would throw in the scaffold).
     if (!cfg.contains("top_nav") || !cfg["top_nav"].is_object()) {
         cfg["top_nav"] = json::object();
     }
 
-    if (!cfg["top_nav"].contains("title")) {
-        cfg["top_nav"]["title"] = default_title;
-    }
-}
-
-
-// Flag-covering variant: the corpus's common four-line block (object + title +
-// show_back_button + show_power_button, all write-if-absent).
-void ensure_top_nav_defaults(json &cfg, const std::string &default_title,
-                             bool default_show_back_button, bool default_show_power_button) {
-    ensure_top_nav_defaults(cfg, default_title);
-
     if (!cfg["top_nav"].contains("show_back_button")) {
         cfg["top_nav"]["show_back_button"] = default_show_back_button;
     }
     if (!cfg["top_nav"].contains("show_power_button")) {
         cfg["top_nav"]["show_power_button"] = default_show_power_button;
+    }
+}
+
+
+// Missing localized content is a developer error in the host view layer —
+// surface it as a screen-named throw, never patch over it with English text.
+void require_top_nav_title(const json &cfg, const char *screen_name) {
+    if (!cfg.contains("top_nav") || !cfg["top_nav"].is_object() ||
+        !cfg["top_nav"].contains("title") || !cfg["top_nav"]["title"].is_string()) {
+        throw std::runtime_error(std::string(screen_name) +
+                                 ": top_nav.title is required (localized content comes from the host)");
     }
 }
 

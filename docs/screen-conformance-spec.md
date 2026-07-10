@@ -27,7 +27,8 @@ as part of conformance.
 pass) is the template every scaffold-based screen conforms to. It demonstrates the
 dominant screen shape end to end: curated per-annotated includes, complete file
 banner with cfg contract, screen-name-prefixed required-field validation,
-write-if-absent default injection annotated to its Python source, both body idioms
+write-if-absent **structural** defaults annotated to their Python source (content
+is host-supplied and validated, per the §5 content policy), both body idioms
 (raw label + shared component with opts), shared-helper parity math, numbered build
 steps matching the Python build order, and the canonical bind/load tail.
 
@@ -66,7 +67,7 @@ Line 1 of the file, above all includes. Required fields, in order:
 ```cpp
 // <screen_name>
 //
-// Python provenance: <Class> (<file.py>:<line>)      [or: no Python screen class — <why>]
+// Python provenance: <Class> (<file.py>)      [or: no Python screen class — <why>]
 // <Behavior summary — what the screen shows and returns.>
 // <Layout notes — including any documented deviation from Python, naming the
 //  sibling screens it diverges from when relevant.>
@@ -79,7 +80,10 @@ Line 1 of the file, above all includes. Required fields, in order:
 
 Rules:
 
-- Python provenance always carries `file.py:line` of the class definition.
+- Python provenance cites the class and file only — **no line numbers**. The
+  linkage is transitional: the Python screens are scheduled for deletion at the
+  LVGL cutover, so the citation aids porting-parity checks today and will be
+  dropped near production; do not invest precision in it.
 - The cfg contract enumerates **every** key the code reads — several screens' tables
   had drifted; a stale contract is a defect (an AI author regenerating a scenario
   from the contract must get a faithful screen).
@@ -126,8 +130,11 @@ void <name>_screen(void *ctx_json) {          // brace on the signature line
     if (!cfg.contains("<key>") || !cfg["<key>"].is_string())
         throw std::runtime_error("<screen_name>: <key> is required and must be a string");
 
-    // defaults: write-if-absent only, each line annotated to its Python source
-    ensure_top_nav_defaults(cfg, "<Default Title>");
+    // structural defaults: write-if-absent, layout/behavior flags only —
+    // never user-visible text (see the content policy below)
+    ensure_top_nav_structure(cfg, /*default_show_back_button=*/true,
+                                  /*default_show_power_button=*/false);
+    require_top_nav_title(cfg, "<screen_name>");
     // forced (non-defaulted) overrides are explicit assignments after the call,
     // annotated with their Python constant
 
@@ -159,10 +166,23 @@ Dimension rules distilled:
 - **Error attribution, two tiers.** Shared helpers keep generic unprefixed messages;
   every screen-specific validation throw is prefixed `"<screen_name>: ..."`. Shared
   helpers never bake one caller's name into messages.
-- **Required vs optional.** Every host-supplied datum without a sensible render
-  default throws when missing. Optional fields read via `cfg.value()`. Sanctioned
-  fail-soft exceptions (e.g. `settings_locale_picker`'s per-row image fail-soft) are
-  stated in the banner as policy.
+- **Content policy — no English content defaults.** Every user-visible string
+  (titles, body text, button labels, status text) arrives **localized from the
+  host view layer** via cfg — the translation layer lives host-side (gettext),
+  so any string literal injected in C++ is English-only by construction and
+  ships untranslated. A missing required content key is a **developer error**:
+  throw a screen-name-prefixed error; never patch over it with an English
+  default. Structural defaults (booleans, layout flags, geometry numbers —
+  `show_back_button`, `is_bottom_list`, `border`, … — nothing rendered as text)
+  remain write-if-absent, annotated to their Python source. Sanctioned
+  exception: the boot/NULL-ctx tier (`main_menu`, `opening_splash`) renders
+  built-in English defaults by documented per-screen contract — those screens
+  can run before any host view layer exists to supply cfg.
+- **Required vs optional.** Required fields (all content, plus any datum without
+  a sensible structural default) throw when missing. Optional structural fields
+  read via `cfg.value()`. Sanctioned fail-soft exceptions (e.g.
+  `settings_locale_picker`'s per-row image fail-soft) are stated in the banner
+  as policy.
 - **Layout tiers.** Tier 1 (default): declarative flex in `upper_body`; widths
   derived from the parent via `lv_obj_get_content_width` (derive-internally rule);
   gaps as `pad_row=0` + per-child `margin_top`. Tier 2: scaffold chrome + measured
@@ -282,7 +302,7 @@ rollout. **REJECTED** = not extractable / anti-extraction.
 | 4 | Aux-key recognition + forwarding (4 recognizer copies; `_on_aux_key` undeclared in `seedsigner.h`) | **EXTRACTED** | `nav_aux_key_index(key)` (`navigation`); `seedsigner_lvgl_on_aux_key` prototype added to `seedsigner.h`; weak default relocated to `components.cpp`; local extern re-declarations deleted. |
 | 5 | Side-panel hardware-key geometry (3 verbatim derivations) | **EXTRACTED** | `kb_side_panel_geometry(...)` (`keyboard_core`); integer expressions copied verbatim; `screen_h` stays a caller-passed `lv_obj_get_height` value. |
 | 6 | Glyph-ink extent measurer clones (admitted local copies of exported helpers) | **EXTRACTED** (mechanical legs) | Delete `measure_ascii_ink` (tools_calc_final_word) and the tight-line-space clone (settings_qr_confirmation); call `measure_text_ink_extents` / the `screen_helpers` export. `components.cpp`'s variant leg: DOCUMENTED. |
-| 7 | top_nav chrome defaults injection (hand-copied into 22 screens) | **PARTIAL** | `ensure_top_nav_defaults(cfg, default_title)` (+ back/power flag variant) (`screen_helpers`, beside `apply_status_type_defaults`, which should later rebuild on top of it). Created now; migrated in conformed screens; remaining sites migrate with rollout. Forced overrides stay explicit assignments after the call. |
+| 7 | top_nav chrome defaults injection (hand-copied into 22 screens) | **PARTIAL** | `ensure_top_nav_structure(cfg, default_show_back, default_show_power)` (structural flags only) + `require_top_nav_title(cfg, screen_name)` (`screen_helpers`). Title-defaulting was REMOVED from the helper per the §5 content policy (2026-07-10): rollout migrates the 22 inline sites to structure+require, deleting their English title defaults — a behavior change on malformed cfg (silent English → throw), noted per screen at migration. Forced overrides stay explicit assignments after the call. `apply_status_type_defaults`' content defaults get the same treatment when the status family conforms. |
 | 8 | Post-layout "bottom of free band" measurement (4 token-identical scaffold sites + variants) | **PARTIAL** | `bottom_button_top_y(screen)` (`screen_scaffold`); precondition (caller ran `lv_obj_update_layout`) documented. Variant sites (op_return's uncorrected `y2`, overview/whole_qr geometry forks): DOCUMENTED. |
 | 9 | Monolith kitchen-sink include prelude (md5-identical 38-line block × 17 + variants) | **PARTIAL** (per-file curation) | No helper — anti-extraction (see §4). Deleted per-file during conformance; conformed screens demonstrate the curated form. |
 | 10 | Simple-text screen skeleton clones (reset / power_off / donate ~80% identical) | **DOCUMENTED** | Proposed `build_simple_text_screen(...)` composition in `screen_helpers`; whole-skeleton helper is a design decision (three files reduce to distinguishing constants). |
@@ -343,8 +363,11 @@ Applied to the conformed screens; the rollout applies it to the rest:
 2. Includes per §4 (curated, purpose-commented, canonical order, kitchen-sink block deleted).
 3. Explicit `using json = nlohmann::json;`.
 4. File skeleton per §2 (anon namespace, entry point last).
-5. Entry flow per §5 (parse → validate → defaults → scaffold → body → geometry →
-   bind → load), section dividers per §9.
+5. Entry flow per §5 (parse → validate → structural defaults → scaffold → body →
+   geometry → bind → load), section dividers per §9.
+5a. Content policy per §5: no English content defaults — every user-visible
+    string is host-supplied; required content throws when missing (boot/NULL-ctx
+    tier excepted by documented contract).
 6. Shared helpers only — no shadow reimplementation; migrate to ledger helpers
    (#1-#8) where the file contains those patterns.
 7. Naming per §7 (full words, `<name>_` static prefix, `g_` sigil).

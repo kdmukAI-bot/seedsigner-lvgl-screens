@@ -9,6 +9,7 @@
 #include "runner_core.h"
 #include "overlay_manager.h"
 #include "locale_loader.h"   // ss_load_locale / ss_unload_locale / ss_reap_retired
+#include "components.h"      // button_text_label / button_set_label_marquee (address-list click test)
 
 #include "lvgl.h"
 
@@ -64,6 +65,37 @@ static int failures = 0;
 static void check(bool cond, const char* msg) {
     printf("[%s] %s\n", cond ? "PASS" : "FAIL", msg);
     if (!cond) ++failures;
+}
+
+// Capture the most recent on_button_selected(index, label) the screen layer reported.
+// A STRONG definition here overrides the weak no-op default in components.cpp for this
+// test binary, standing in for the host — the address-list click test below asserts what
+// the host actually receives.
+static uint32_t    g_last_selected_index = 0;
+static std::string g_last_selected_label;
+extern "C" void seedsigner_lvgl_on_button_selected(uint32_t index, const char* label) {
+    g_last_selected_index = index;
+    g_last_selected_label = label ? label : "";
+}
+
+// Recursively find the address-explorer list's row-0 button: the first lv_button whose
+// tagged text label begins with "0:" ("0:{address}"). The top-nav back/power buttons carry
+// icon glyphs, never a "0:" prefix, so they are skipped naturally.
+static lv_obj_t* find_address_row_button(lv_obj_t* obj) {
+    if (!obj) return nullptr;
+    if (lv_obj_check_type(obj, &lv_button_class)) {
+        lv_obj_t* lbl = button_text_label(obj);
+        if (lbl) {
+            const char* t = lv_label_get_text(lbl);
+            if (t && t[0] == '0' && t[1] == ':') return obj;
+        }
+    }
+    uint32_t n = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < n; ++i) {
+        lv_obj_t* found = find_address_row_button(lv_obj_get_child(obj, i));
+        if (found) return found;
+    }
+    return nullptr;
 }
 
 // Advance LVGL time by total_ms WITHOUT any input, in steps small enough that
@@ -128,6 +160,59 @@ int main(int argc, char** argv) {
     for (const auto& g : groups)
         if (g.scenarios.size() > 1) found_variations = true;
     check(found_variations, "at least one screen has merged variations");
+
+    // -----------------------------------------------------------------------
+    // Address-explorer list: a row click reports the row's CANONICAL FULL text,
+    // identical whether the row is AT REST (touch mode: abbreviated on screen) or
+    // REVEALED (hardware focus: the full address swapped in + marquee-scrolled).
+    // Regression for the bug where the click handed the host the abbreviated string
+    // in touch mode but the full one under hardware focus, because it read the LIVE
+    // label (which differs by input mode). It now reads the registered focus-reveal
+    // "full" form, so both report one consistent string. A directly-sent CLICKED has
+    // no pointer indev, so it reaches on_button_selected exactly like the nav layer's
+    // hardware/touch click paths do.
+    // -----------------------------------------------------------------------
+    printf("\n-- address-explorer list: click return is input-mode-independent --\n");
+    {
+        runner_core::resize(240, 240);
+        std::string list_ctx = "{}";
+        for (const auto& g : groups)
+            if (g.screen == "tools_address_explorer_address_list_screen" && !g.scenarios.empty())
+                list_ctx = g.scenarios.front().context_json;
+
+        runner_core::load_screen("tools_address_explorer_address_list_screen", list_ctx);
+        for (int i = 0; i < 3; ++i) runner_core::tick(16);
+
+        lv_obj_t* row0 = find_address_row_button(lv_scr_act());
+        check(row0 != nullptr, "address list: found row 0 button");
+        if (row0) {
+            // At rest (touch analog): force the row to its abbreviated "{i}:{head}…{tail}"
+            // form. (On load in hardware mode bind_screen_navigation reveals row 0 via
+            // initial_selected_index=0, so un-reveal it first to reproduce the touch state
+            // where no row is focused and the on-screen label is truncated.)
+            button_set_label_marquee(row0, false);
+            g_last_selected_label.clear();
+            lv_obj_send_event(row0, LV_EVENT_CLICKED, NULL);
+            std::string at_rest = g_last_selected_label;
+
+            // Revealed (hardware-focus analog): swap the full address in, then click.
+            button_set_label_marquee(row0, true);
+            g_last_selected_label.clear();
+            lv_obj_send_event(row0, LV_EVENT_CLICKED, NULL);
+            std::string revealed = g_last_selected_label;
+
+            printf("     at-rest click  -> \"%s\"\n", at_rest.c_str());
+            printf("     revealed click -> \"%s\"\n", revealed.c_str());
+
+            check(!at_rest.empty(), "address list: at-rest click reported a label");
+            check(at_rest == revealed,
+                  "address list: click return identical at rest vs revealed (input-mode-independent)");
+            check(at_rest.find("...") == std::string::npos,
+                  "address list: click return is the FULL address (no abbreviation ellipsis)");
+            check(at_rest.rfind("0:", 0) == 0,
+                  "address list: click return keeps the row index prefix");
+        }
+    }
 
     // Malformed JSON must be rejected via a thrown exception, not a crash.
     bool threw = false;

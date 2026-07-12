@@ -872,11 +872,25 @@ void button_toggle_callback(lv_event_t* e) {
     // Derive label text from the button's tagged TEXT label at event time (icon
     // siblings are skipped). This avoids dangling pointers when original source
     // strings are temporary.
+    //
+    // Focus-reveal rows (the address-explorer list) report their CANONICAL full text,
+    // not the live displayed text: at rest a row shows its abbreviated "{i}:{head}…{tail}",
+    // but under hardware focus button_set_label_marquee swaps in the full address — so
+    // reading the live label would hand the host the abbreviated string in touch mode and
+    // the full one under hardware focus (same click, different result by input mode). The
+    // registered reveal "full" form is identical in both modes, so a click reports one
+    // consistent value. The string is owned by g_focus_reveal_labels (valid until the
+    // label's LV_EVENT_DELETE), so the c_str() stays live across this synchronous callback.
     const char *label_text = "";
     lv_obj_t *text_child = find_button_text_label(btn);
     if (text_child) {
-        const char *t = lv_label_get_text(text_child);
-        if (t && t[0] != '\0') label_text = t;
+        auto reveal = g_focus_reveal_labels.find(text_child);
+        if (reveal != g_focus_reveal_labels.end() && !reveal->second.second.empty()) {
+            label_text = reveal->second.second.c_str();   // canonical full form (mode-independent)
+        } else {
+            const char *t = lv_label_get_text(text_child);
+            if (t && t[0] != '\0') label_text = t;
+        }
     }
     seedsigner_lvgl_on_button_selected(selected_index, label_text);
 
@@ -1712,15 +1726,20 @@ lv_obj_t* formatted_address(lv_obj_t* parent, const formatted_address_opts_t* op
     if (plen + n + n > len) plen = 0;
 
     // --- Compact single-line form (max_lines == 1): [prefix] [head] … [tail], with a
-    // space between the gray prefix and the highlighted head. Aim to show the FULL first-n
-    // chars after the prefix (so wider screens display all 7), trimming the head only as
-    // far as needed to fit a narrow screen.
+    // space between the gray prefix and the highlighted head. The verifiable FIRST-n is
+    // PRIORITIZED: the head shows the full first-n whenever it fits, and a narrow screen
+    // gives up TAIL characters first (down to none, leaving "[prefix] head…") before the
+    // head is ever trimmed — so the first seven survive even on the smallest display. (The
+    // partial tail that remains is still the address's true last chars, so it stays
+    // verifiable; it just yields space to the head instead of the other way around.)
     if (opts->max_lines == 1) {
         int sep       = (plen > 0) ? 1 : 0;   // space between prefix and head
-        int head_show = n;                    // aim for the full first-n after the prefix
-        int total = plen + sep + head_show + 3 + n;   // prefix sep head "..." tail
-        int fit   = (int)(width / char_width);
-        while (total > fit && head_show > 1) { --head_show; --total; }   // trim to fit
+        int head_show = n;                    // full first-n after the prefix (PRIORITY: kept intact)
+        int tail_show = n;                    // last-n, trimmed first when the line is narrow
+        int fit       = (int)(width / char_width);
+        int total     = plen + sep + head_show + 3 + tail_show;   // prefix sep head "..." tail
+        while (total > fit && tail_show > 0) { --tail_show; --total; }   // give up the tail first
+        while (total > fit && head_show > 1) { --head_show; --total; }   // trim the head only as a last resort
 
         int32_t x = (width - char_width * total) / 2;
         if (x < 0) x = 0;
@@ -1728,7 +1747,7 @@ lv_obj_t* formatted_address(lv_obj_t* parent, const formatted_address_opts_t* op
         x += char_width * sep;                                         // gap after prefix
         emit(x, 0, address.substr(plen, head_show), net); x += char_width * head_show;
         emit(x, 0, "...", gray);                          x += char_width * 3;
-        emit(x, 0, address.substr(len - n, n), net);
+        if (tail_show > 0) emit(x, 0, address.substr(len - tail_show, tail_show), net);
         lv_obj_set_height(cont, line_h);
         return cont;
     }

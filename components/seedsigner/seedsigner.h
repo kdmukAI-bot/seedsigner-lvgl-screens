@@ -110,6 +110,12 @@ void seed_address_verification_screen(void *ctx_json);
 // Safe no-op when no such screen is active — the same host-driven live-push contract as
 // qr_display_set_frame(); the host owns the worker/match logic and closes the screen.
 void seed_address_verification_set_progress(const char *progress_text);
+// The confirmation shown after a successful Address Explorer verification (parity with
+// Python SeedAddressVerificationSuccessScreen, a LargeIconStatusScreen subclass): SUCCESS
+// icon + green headline over an abbreviated FormattedAddress, an address-type line, and an
+// "index N" line, above a single OK button. cfg: status_headline / address /
+// address_type_text / index_text / button_list / top_nav.title.
+void seed_address_verification_success_screen(void *ctx_json);
 // Tools > Calc final word: the "final word math" breakdown (parity with Python
 // ToolsCalcFinalWordScreen). Shows the user's entered entropy bits, the checksum
 // bits (orange), and the merged final word — over three centered monospace bit rows.
@@ -125,6 +131,12 @@ void seed_transcribe_whole_qr_screen(void *ctx_json);
 // trailing "Next N" button (right chevron) pages forward. cfg: addresses / start_index /
 // initial_selected_index / next_label / top_nav.title.
 void tools_address_explorer_address_list_screen(void *ctx_json);
+// Address Explorer address-type chooser (parity with Python ToolsAddressExplorerAddressTypeScreen).
+// A bottom-pinned [Receive, Change] button list under a context header: either two left-aligned
+// IconTextLine rows (Fingerprint + Derivation) for a single-sig seed, or a single centered
+// "Wallet descriptor" row for a loaded descriptor. cfg: button_list / top_nav.title / (fingerprint +
+// fingerprint_label + derivation_text + derivation_label) OR (wallet_descriptor_text + wallet_descriptor_label).
+void tools_address_explorer_address_type_screen(void *ctx_json);
 
 // Simple info screens — a title over centered/anchored body text, no button list.
 //   reset_screen                    (Python ResetScreen): "Restarting" + wipe notice; no nav buttons.

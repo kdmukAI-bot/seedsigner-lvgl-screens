@@ -1150,6 +1150,38 @@
       }
     ]
   },
+  "seed_address_verification_success_screen": {
+    "context": {
+      "top_nav": {
+        "title": "Success!",
+        "show_back_button": false,
+        "show_power_button": false
+      },
+      "status_headline": "Address Verified",
+      "address": "bc1q6p00wazu4nnqac29fvky6vhjnnhku5u2g9njss62rvy7e0yuperq86f5ek",
+      "address_type_text": "receive address",
+      "index_text": "index 7",
+      "button_list": [
+        "OK"
+      ]
+    },
+    "variations": [
+      {
+        "name": "change_address",
+        "context": {
+          "address_type_text": "change address",
+          "index_text": "index 12"
+        }
+      },
+      {
+        "name": "taproot",
+        "context": {
+          "address": "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0",
+          "index_text": "index 0"
+        }
+      }
+    ]
+  },
   "tools_calc_final_word_screen": {
     "context": {
       "top_nav": {
@@ -1261,6 +1293,41 @@
         "bc1qfkgjg95ctrnjkh76xqvkej6n8mvpgny6g6dw79d5r06jl9978v4q97ygvr"
       ]
     }
+  },
+  "tools_address_explorer_address_type_screen": {
+    "context": {
+      "top_nav": {
+        "title": "Address Explorer",
+        "show_back_button": true
+      },
+      "fingerprint": "8c65eb9f",
+      "fingerprint_label": "Fingerprint",
+      "derivation_text": "Native Segwit",
+      "derivation_label": "Derivation",
+      "button_list": [
+        "Receive addresses",
+        "Change addresses"
+      ]
+    },
+    "variations": [
+      {
+        "name": "custom_derivation",
+        "context": {
+          "derivation_text": "m/48'/0'/0'/2'"
+        }
+      },
+      {
+        "name": "wallet_descriptor",
+        "context": {
+          "fingerprint": null,
+          "fingerprint_label": null,
+          "derivation_text": null,
+          "derivation_label": null,
+          "wallet_descriptor_text": "2 / 3 multisig",
+          "wallet_descriptor_label": "Wallet descriptor"
+        }
+      }
+    ]
   },
   "reset_screen": {
     "context": {

@@ -822,6 +822,50 @@
       }
     ]
   },
+  "seed_transcribe_freeform_qr_screen": {
+    "context": {
+      "qr_data": "073318950739065415961602009907670428187212261116",
+      "qr_mode": "numeric",
+      "data_encoding": "utf8",
+      "num_modules": 25,
+      "initial_pixels_per_module": 40,
+      "initial_center_module_x": 3,
+      "initial_center_module_y": 3,
+      "exit_text": "KEY1/3 zoom · click exits"
+    },
+    "variations": [
+      {
+        "name": "zoomed_in",
+        "context": {
+          "initial_pixels_per_module": 72,
+          "initial_center_module_x": 12,
+          "initial_center_module_y": 12
+        }
+      },
+      {
+        "name": "whole_qr",
+        "context": {
+          "qr_data": "011513251154012711900771041507421289190620080870026613431420201617920614089619290300152408010643",
+          "num_modules": 29,
+          "initial_pixels_per_module": 8,
+          "initial_center_module_x": 14,
+          "initial_center_module_y": 14
+        }
+      },
+      {
+        "name": "compactseedqr",
+        "context": {
+          "qr_data": "5bbd9d71a8ec7990831aff359d426545",
+          "qr_mode": "byte",
+          "data_encoding": "hex",
+          "num_modules": 21,
+          "initial_pixels_per_module": 48,
+          "initial_center_module_x": 3,
+          "initial_center_module_y": 3
+        }
+      }
+    ]
+  },
   "seed_finalize_screen": {
     "context": {
       "top_nav": {"title": "Finalize Seed", "show_power_button": false},

@@ -101,6 +101,16 @@ void qr_display_screen(void *ctx_json);
 // solid squares to match the pre-printed paper templates; data modules are round dots.
 // cfg: qr_data / qr_mode / data_encoding / num_modules / initial_zone_x / initial_zone_y / exit_text.
 void seed_transcribe_zoomed_qr_screen(void *ctx_json);
+// PROTOTYPE — freeform (adjustable-zoom, free-pan) SeedQR transcription for large touch
+// panels. Renders a conventional QR (black modules on a white field) so a paper SeedQR
+// template laid over the glass can be traced by the screen's backlight — "black is black",
+// no mental inversion: zoom the on-screen module pitch to match the printed template, drag
+// any block under it, mark the dark cells, repeat. Touch = left-edge vertical zoom slider +
+// drag-to-pan + gutter X; hardware = D-pad pan, KEY1/KEY3 zoom in/out, KEY2/click exit. Same
+// direct-draw viewport as the zoomed screen (no oversized buffer). cfg: qr_data / qr_mode /
+// data_encoding / exit_text / initial_pixels_per_module / initial_center_module_x /
+// initial_center_module_y / show_gridlines.
+void seed_transcribe_freeform_qr_screen(void *ctx_json);
 void psbt_overview_screen(void *ctx_json);
 void psbt_address_details_screen(void *ctx_json);
 void psbt_change_details_screen(void *ctx_json);

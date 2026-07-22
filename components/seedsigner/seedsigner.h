@@ -160,9 +160,11 @@ void power_options_screen(void *ctx_json);
 //   reset_screen                    (Python ResetScreen): "Restarting" + wipe notice; no nav buttons.
 //   power_off_not_required_screen   (Python PowerOffNotRequiredScreen): "Just Unplug It" + back button.
 //   donate_screen                   (Python DonateScreen): paragraph + accent "seedsigner.com" 28px line.
+//   version_screen                  (Python VersionScreen): fixed-width version name + optional fork/commit rows + bottom-pinned timestamp.
 void reset_screen(void *ctx_json);
 void power_off_not_required_screen(void *ctx_json);
 void donate_screen(void *ctx_json);
+void version_screen(void *ctx_json);
 
 // PSBT OP_RETURN payload (parity with Python PSBTOpReturnScreen). Bottom-list screen
 // showing the payload either as centered human-readable text (cfg.text) or as a

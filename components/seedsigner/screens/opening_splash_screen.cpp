@@ -71,6 +71,8 @@
 
 #include <nlohmann/json.hpp>  // json (cfg defaults, merge_patch, reads)
 
+#include <cstdio>             // fprintf (truncation log)
+#include <cstdint>            // uint32_t (byte offsets)
 #include <stdexcept>          // std::runtime_error (required sponsor_text)
 #include <string>             // std::string
 
@@ -82,6 +84,48 @@ using json = nlohmann::json;
 // ---------------------------------------------------------------------------
 
 namespace {
+
+// Step past one UTF-8 codepoint starting at byte `i`, returning the byte offset of
+// the next codepoint (clamped to `total`). Version strings are ASCII in practice,
+// but this keeps the wrap codepoint- (not byte-) accurate to match Python `str`
+// slicing: skip the lead byte, then any 0b10xxxxxx continuation bytes.
+uint32_t splash_utf8_step(const char *s, uint32_t i, uint32_t total) {
+    if (i >= total) return total;
+    ++i;  // lead byte
+    while (i < total && ((unsigned char)s[i] & 0xC0) == 0x80) ++i;  // continuation bytes
+    return i;
+}
+
+// Hard character-wrap the full version string for the splash: split into consecutive
+// runs of at most `max_chars` codepoints, keep the first `max_lines` runs joined by
+// '\n', and set `truncated_out` if anything past the cap was dropped. Version strings
+// have no spaces to break on, so this is a hard split, not word-wrap — mirroring the
+// retired PIL splash, which hard-cut at 20 chars into a 2nd line.
+std::string wrap_splash_version(const std::string &version, int max_chars,
+                                int max_lines, bool &truncated_out) {
+    truncated_out = false;
+    if (max_chars <= 0 || max_lines <= 0) return version;  // defensive: no wrap
+
+    const char *s = version.c_str();
+    const uint32_t total = (uint32_t)version.size();
+    std::string wrapped;
+    uint32_t byte_i = 0;
+    int line = 0;
+
+    while (byte_i < total && line < max_lines) {
+        const uint32_t line_start = byte_i;
+        for (int cp = 0; cp < max_chars && byte_i < total; ++cp) {
+            byte_i = splash_utf8_step(s, byte_i, total);
+        }
+        if (line > 0) wrapped += '\n';
+        wrapped.append(version, line_start, byte_i - line_start);
+        ++line;
+    }
+
+    // Bytes remaining after the last kept line means the string overran the cap.
+    truncated_out = (byte_i < total);
+    return wrapped;
+}
 
 // Timed reveal sequence: the timer advances through these phases on wall-clock
 // elapsed time, toggling LV_OBJ_FLAG_HIDDEN to bring elements in.
@@ -295,14 +339,35 @@ void opening_splash_screen(void *ctx_json) {
     // 2. Version label (accent color), COMPONENT_PADDING below the logo's bottom.
     //    Mirrors Python: version_y = canvas_h/2 + logo_h/2 + logo_offset_y + CP, drawn
     //    top-anchored; subtract text_top_leading so the visible text lands like PIL.
+    //    `version` is the FULL version string (e.g. a git-aware "v0.8.7-3-gabc1234").
+    //    The screen owns the wrap — only it knows the active panel — splitting into
+    //    <= version_max_lines lines of at most version_wrap_chars codepoints (both
+    //    per-profile). A short string stays one line and lands exactly where it did
+    //    before this change (backward compatible).
     lv_obj_t *version_label = NULL;
     if (!version.empty()) {
+        bool version_truncated = false;
+        const std::string wrapped_version = wrap_splash_version(
+            version, active_profile().version_wrap_chars,
+            active_profile().version_max_lines, version_truncated);
+        if (version_truncated) {
+            // No silent cap: a version longer than the panel can show is dropped to
+            // the line cap and logged (it would otherwise overflow the panel).
+            fprintf(stderr,
+                    "opening_splash_screen: version '%s' exceeds %d line(s) of %d chars; truncated\n",
+                    version.c_str(), active_profile().version_max_lines,
+                    active_profile().version_wrap_chars);
+        }
+
         version_label = lv_label_create(screen_root);
-        lv_label_set_text(version_label, version.c_str());
+        lv_label_set_text(version_label, wrapped_version.c_str());
         lv_obj_set_style_text_font(version_label, &TOP_NAV_TITLE_FONT, LV_PART_MAIN);
         lv_obj_set_style_text_color(version_label, lv_color_hex(ACCENT_COLOR), LV_PART_MAIN);
+        // Center EACH line: a one-line string is unaffected, but multi-line lines
+        // stack centered like the PIL splash rather than left-aligned as a block.
+        lv_obj_set_style_text_align(version_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
         const int32_t version_top = screen_h / 2 + logo_h / 2 + logo_offset_y + COMPONENT_PADDING;
-        const int32_t lead = text_top_leading(&TOP_NAV_TITLE_FONT, version.c_str());
+        const int32_t lead = text_top_leading(&TOP_NAV_TITLE_FONT, wrapped_version.c_str());
         lv_obj_align(version_label, LV_ALIGN_TOP_MID, 0, version_top - lead);
     }
 

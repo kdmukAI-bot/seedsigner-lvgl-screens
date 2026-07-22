@@ -163,6 +163,15 @@ struct DisplayProfile {
     int button_height;
     int button_radius;
 
+    // Opening-splash version label wrapping. version_wrap_chars = max codepoints per
+    // line before a hard character split; version_max_lines = the line cap. These are
+    // CHARACTER COUNTS, not pixels — they deliberately do NOT scale by px_multiplier:
+    // on a square panel the font and the usable width scale together, so the per-line
+    // capacity is constant across heights. The splash owns the wrap because only it
+    // knows the active panel; see opening_splash_screen.cpp.
+    int version_wrap_chars;
+    int version_max_lines;
+
     const lv_font_t* main_menu_title_font;
     const lv_font_t* top_nav_title_font;
     const lv_font_t* large_button_font;

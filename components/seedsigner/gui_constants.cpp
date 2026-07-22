@@ -127,6 +127,15 @@ static DisplayProfile make_profile(int width, int height) {
         px_scale(18, px_mult),   // button_font_size
         px_scale(32, px_mult),   // button_height
         px_scale(8, px_mult),    // button_radius
+        // version_wrap_chars / version_max_lines (splash version label). 20 / 2 =
+        // parity with the retired PIL splash on the 240x240 square panel. That square
+        // is the NARROWEST case (font widest relative to usable width), so 20 chars
+        // never overflows the wider landscape profiles (320x240, 480x320, 800x480)
+        // either — it is just conservative there. Their fit-more-per-line optimum is
+        // deferred until those splashes are designed (opening-splash-version-multiline
+        // contract). Counts, not pixels, so no px_scale.
+        20,                      // version_wrap_chars
+        2,                       // version_max_lines
         fonts.main_menu_title, fonts.title, fonts.large_button, fonts.button, fonts.body, fonts.icon, fonts.icon_large, fonts.icon_primary_screen, fonts.keyboard, fonts.candidate, fonts.top_nav_icon,
     };
 }

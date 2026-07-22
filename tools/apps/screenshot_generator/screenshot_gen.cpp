@@ -107,6 +107,7 @@ static const std::unordered_map<std::string, screen_fn_t> k_screen_registry = {
     {"reset_screen", reset_screen},
     {"power_off_not_required_screen", power_off_not_required_screen},
     {"donate_screen", donate_screen},
+    {"version_screen", version_screen},
     {"psbt_op_return_screen", psbt_op_return_screen},
     {"io_test_screen", io_test_screen},
 };

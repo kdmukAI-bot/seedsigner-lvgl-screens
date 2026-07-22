@@ -303,7 +303,8 @@
       { "name": "boot_logo", "context": { "boot_logo_only": true } },
       { "name": "cpython_no_partners", "context": { "show_partner_logos": false } },
       { "name": "micropython_partners", "context": { "logo_already_shown": true } },
-      { "name": "micropython_no_partners", "context": { "logo_already_shown": true, "show_partner_logos": false } }
+      { "name": "micropython_no_partners", "context": { "logo_already_shown": true, "show_partner_logos": false } },
+      { "name": "long_version_multiline", "context": { "version": "v0.8.7-127-gdeadbeef-dirty", "show_partner_logos": false } }
     ]
   },
   "large_icon_status_screen": {
@@ -1599,6 +1600,36 @@
       "text": "SeedSigner is 100% free & open source, funded solely by the Bitcoin community.\n\nDonate onchain or LN at:",
       "url": "seedsigner.com"
     }
+  },
+  "version_screen": {
+    "context": {
+      "top_nav": {
+        "title": "Version",
+        "show_back_button": true
+      },
+      "version_name": "v0.8.7-3-g3f8c1e0",
+      "version_fork": "my-fork",
+      "short_commit_hash": "3f8c1e0",
+      "version_timestamp": "2026-07-21 14:30:00 UTC"
+    },
+    "variations": [
+      {
+        "name": "release_image",
+        "context": {
+          "version_name": "v0.8.7",
+          "version_fork": null,
+          "short_commit_hash": null
+        }
+      },
+      {
+        "name": "long_branch_name",
+        "context": {
+          "version_name": "feature/version-display",
+          "version_fork": "example-fork",
+          "short_commit_hash": "7d9e2a4"
+        }
+      }
+    ]
   },
   "psbt_op_return_screen": {
     "context": {
